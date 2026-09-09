@@ -419,10 +419,8 @@ get_github_deb_url() { curl -sfL "https://api.github.com/repos/${1}/releases/lat
 download_deb "Discord" "https://discord.com/api/download?platform=linux&format=deb" "$DEB_DIR/discord.deb"
 OPENCODE_URL=$(get_github_deb_url "anomalyco/opencode" "opencode-desktop-linux-amd64\\.deb")
 [[ -n "$OPENCODE_URL" ]] && download_deb "opencode-desktop" "$OPENCODE_URL" "$DEB_DIR/opencode-desktop.deb"
-LSFG_URL=$(get_github_deb_url "YuriSizov/ls-fg" "ls-fg_.*deb")
-LSFG_VK_URL=$(get_github_deb_url "YuriSizov/ls-fg-vk" "deb")
-[[ -n "$LSFG_URL" ]] && download_deb "ls-fg" "$LSFG_URL" "$DEB_DIR/lsfg.deb"
-[[ -n "$LSFG_VK_URL" ]] && download_deb "ls-fg-vk" "$LSFG_VK_URL" "$DEB_DIR/lsfg-vk.deb"
+LSFG_VK_URL=$(get_github_deb_url "PancakeTAS/lsfg-vk" "lsfg-vk-.*x86_64\\.deb")
+[[ -n "$LSFG_VK_URL" ]] && download_deb "lsfg-vk" "$LSFG_VK_URL" "$DEB_DIR/lsfg-vk.deb"
 
 add_ppa_and_install "faugus/faugus-launcher" faugus-launcher || true
 
