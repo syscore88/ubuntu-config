@@ -421,8 +421,7 @@ download_deb "Discord" "https://discord.com/api/download?platform=linux&format=d
 OPENCODE_URL=$(get_github_deb_url "anomalyco/opencode" "opencode-desktop-linux-amd64\\.deb")
 [[ -n "$OPENCODE_URL" ]] && download_deb "opencode-desktop" "$OPENCODE_URL" "$DEB_DIR/opencode-desktop.deb"
 
-HEROIC_URL=$(get_github_deb_url "Heroic-Games-Launcher/HeroicGamesLauncher" "amd64\\.deb")
-[[ -n "$HEROIC_URL" ]] && download_deb "Heroic Games Launcher" "$HEROIC_URL" "$DEB_DIR/heroic.deb"
+add_ppa_and_install "faugus/faugus-launcher" faugus-launcher
 
 shopt -s nullglob
 DEB_FILES=("$DEB_DIR"/*.deb)
@@ -432,17 +431,6 @@ if [[ ${#DEB_FILES[@]} -gt 0 ]]; then
         sudo apt-get install -yq "$deb" || true
     done
 fi
-shopt -u nullglob
-rm -rf "$DEB_DIR"
-
-APPLICATIONS_DIR="$HOME/.local/share/applications"
-for shortcut in \
-    "gay.pancake.lsfg-vk-ui.desktop" \
-    "io.github.eugeniosegala.mako.desktop" \
-    "io.github.eugeniosegala.mako.uninstaller.desktop"; do
-    rm -f "$APPLICATIONS_DIR/$shortcut"
-done
-
 # ==========================================================
 # ETAP 3/3: WIRTUALIZACJA, FIREWALL, ZSH, OPTYMALIZACJA
 # ==========================================================
