@@ -435,6 +435,14 @@ fi
 shopt -u nullglob
 rm -rf "$DEB_DIR"
 
+APPLICATIONS_DIR="$HOME/.local/share/applications"
+for shortcut in \
+    "gay.pancake.lsfg-vk-ui.desktop" \
+    "io.github.eugeniosegala.mako.desktop" \
+    "io.github.eugeniosegala.mako.uninstaller.desktop"; do
+    rm -f "$APPLICATIONS_DIR/$shortcut"
+done
+
 # ==========================================================
 # ETAP 3/3: WIRTUALIZACJA, FIREWALL, ZSH, OPTYMALIZACJA
 # ==========================================================
