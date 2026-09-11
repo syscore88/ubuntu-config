@@ -320,11 +320,14 @@ PACKAGES_INSTALL=(
     p7zip-full makeself zenity innoextract needrestart flatpak timeshift
     python3-defusedxml python3-packaging python3-pip pipx python3-tqdm
     libayatana-appindicator3-1 gamemode vulkan-tools mangohud
-    vkd3d-compiler goverlay winetricks
+    vkd3d-compiler winetricks
     gcc make cmake meson ninja-build
     gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
     zsh zsh-syntax-highlighting zsh-autosuggestions
     pkg-config libvulkan-dev mesa-common-dev
+    qt6-qpa-plugins libqt6quick6 qml6-module-qtquick-controls qml6-module-qtquick-layouts
+    qml6-module-qtquick-window qml6-module-qtquick-dialogs qml6-module-qtqml-workerscript
+    qml6-module-qtquick-templates qml6-module-qt-labs-folderlistmodel
 )
 
 wait_for_apt
@@ -431,6 +434,14 @@ if [[ ${#DEB_FILES[@]} -gt 0 ]]; then
         sudo apt-get install -yq "$deb" || true
     done
 fi
+
+LSFG_TMP="$(mktemp -d)"
+LSFG_URL="$(curl -fsSL https://builds.lsfg-vk.dev/ | grep -oE 'https://[^"'"'"']+linux[^"'"'"']*\.tar\.xz' | head -n1 || true)"
+if [[ -n "$LSFG_URL" ]] && curl -fsSL -o "$LSFG_TMP/lsfg-vk.tar.xz" "$LSFG_URL"; then
+    mkdir -p "$HOME/.local"
+    tar -xf "$LSFG_TMP/lsfg-vk.tar.xz" -C "$HOME/.local" || true
+fi
+rm -rf "$LSFG_TMP"
 # ==========================================================
 # ETAP 3/3: WIRTUALIZACJA, FIREWALL, ZSH, OPTYMALIZACJA
 # ==========================================================
