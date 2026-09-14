@@ -1,0 +1,13 @@
+"compatibilitytools"
+{
+  "compat_tools"
+  {
+    "Proton-GE Latest"
+    {
+      "install_path" "."
+      "display_name" "Proton-GE Latest"
+      "from_oslist"  "windows"
+      "to_oslist"    "linux"
+    }
+  }
+}
