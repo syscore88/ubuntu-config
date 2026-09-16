@@ -287,7 +287,7 @@ show_progress 4 $TOTAL_STEPS "$MSG_PHASE_2"
 # Pakiety do całkowitego usunięcia z systemu
 PACKAGES_REMOVE=(
     nano konqueror plasma-browser-integration plasma-vault krdp krfb
-    plasma-thunderbolt kontact kmail kontrast plasma-welcome kaddressbook
+    kontact kmail kontrast plasma-welcome kaddressbook
     kdepim-runtime akonadi-server akregator korganizer epiphany decibels
     gnome-user-docs gnome-contacts gnome-maps gnome-weather gnome-calendar
     gnome-clocks kwalletmanager evolution evolution-common evolution-plugins
@@ -316,7 +316,7 @@ PACKAGES_INSTALL=(
     libreoffice gmic mixxx kdenlive soundconverter gimp krita audacity
     vim dconf-editor hunspell-pl bleachbit profile-sync-daemon git build-essential
     unrar-free mc btrfs-progs exfatprogs ntfs-3g os-prober
-    adb fastboot fsarchiver inxi pv rsync
+    adb fastboot fsarchiver inxi pv rsync qmmp qmmp-plugin-pack vlc vlc-plugin-access-extra
     p7zip-full makeself zenity innoextract needrestart flatpak timeshift
     python3-defusedxml python3-packaging python3-pip pipx python3-tqdm
     libayatana-appindicator3-1 gamemode vulkan-tools mangohud
@@ -490,8 +490,6 @@ network-traffic=false
 autoconnect=1
 vm-window-size=(1280, 842)
 DCONFEOF
-else
-    log_warn "Brak polecenia dconf – pomijam wczytanie ustawień virt-managera." "dconf command not found – skipping virt-manager settings import."
 fi
 
 for svc in libvirtd virtqemud; do
