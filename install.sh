@@ -153,13 +153,15 @@ show_progress() {
 }
 
 if [[ "$SCRIPT_LANG" == "pl" ]]; then
-    MSG_PHASE_1="[1/3] Przygotowanie repozytoriów i aktualizacja systemu..."
-    MSG_PHASE_2="[2/3] Usuwanie zbędnych pakietów i instalacja aplikacji..."
-    MSG_PHASE_3="[3/3] Konfiguracja usług, środowiska ZSH i optymalizacja..."
+    MSG_PHASE_1="[1/4] Przygotowywanie..."
+    MSG_PHASE_2="[2/4] Instalacja..."
+    MSG_PHASE_3="[3/4] Optymalizacja..."
+    MSG_PHASE_4="[4/4] Finalizowanie..."
 else
-    MSG_PHASE_1="[1/3] Preparing repositories and updating system..."
-    MSG_PHASE_2="[2/3] Removing unwanted packages and installing apps..."
-    MSG_PHASE_3="[3/3] Configuring services, ZSH environment, and optimization..."
+    MSG_PHASE_1="[1/4] Preparing..."
+    MSG_PHASE_2="[2/4] Installing..."
+    MSG_PHASE_3="[3/4] Optimizing..."
+    MSG_PHASE_4="[4/4] Finalizing..."
 fi
 
 TOTAL_STEPS=12
@@ -227,7 +229,7 @@ add_ppa_and_install() {
 }
 
 # ==========================================================
-# ETAP 1/3: PRZYGOTOWANIE REPOZYTORIÓW I AKTUALIZACJA
+# ETAP 1/4: PRZYGOTOWYWANIE
 # ==========================================================
 show_progress 0 $TOTAL_STEPS "$MSG_PHASE_1"
 
@@ -306,7 +308,7 @@ sudo apt-get upgrade -yq || true
 sudo apt-get autoremove -yq || true
 
 # ==========================================================
-# ETAP 2/3: USUWANIE PAKIETÓW I INSTALACJA APKLIKACJI
+# ETAP 2/4: INSTALACJA
 # ==========================================================
 show_progress 4 $TOTAL_STEPS "$MSG_PHASE_2"
 
@@ -342,12 +344,11 @@ PACKAGES_INSTALL=(
     libreoffice gmic mixxx kdenlive soundconverter gimp krita audacity
     vim dconf-editor hunspell-pl bleachbit profile-sync-daemon git build-essential
     unrar-free mc btrfs-progs exfatprogs ntfs-3g os-prober
-    adb fastboot fsarchiver inxi pv rsync qmmp qmmp-plugin-pack vlc vlc-plugin-access-extra
+    adb fastboot fsarchiver inxi pv rsync qmmp vlc vlc-plugin-access-extra
     p7zip-full makeself zenity innoextract needrestart flatpak timeshift
     python3-defusedxml python3-packaging python3-pip pipx python3-tqdm
     libayatana-appindicator3-1 gamemode vulkan-tools mangohud
-    vkd3d-compiler winetricks
-    gcc make cmake meson ninja-build
+    vkd3d-compiler winetricks gcc make cmake meson ninja-build
     gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
     zsh zsh-syntax-highlighting zsh-autosuggestions
     pkg-config libvulkan-dev mesa-common-dev
@@ -469,7 +470,7 @@ if [[ -n "$LSFG_URL" ]] && curl -fsSL -o "$LSFG_TMP/lsfg-vk.tar.xz" "$LSFG_URL";
 fi
 rm -rf "$LSFG_TMP"
 # ==========================================================
-# ETAP 3/3: WIRTUALIZACJA, FIREWALL, ZSH, OPTYMALIZACJA
+# ETAP 3/4: OPTYMALIZACJA
 # ==========================================================
 show_progress 9 $TOTAL_STEPS "$MSG_PHASE_3"
 
@@ -610,7 +611,8 @@ apiEnabled=false
 EOF
 fi
 
-show_progress 12 $TOTAL_STEPS "$MSG_PHASE_3"
+# ETAP 4/4: CZYSZCZENIE
+show_progress 12 $TOTAL_STEPS "$MSG_PHASE_4"
 echo -e "\n" >&3
 
 if [ "${#FAILED_PACKAGES[@]}" -gt 0 ]; then
