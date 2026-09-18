@@ -360,7 +360,6 @@ sudo apt-get autoremove -yq || true
 # ==========================================================
 show_progress 4 $TOTAL_STEPS "$MSG_PHASE_2"
 
-# Pakiety do całkowitego usunięcia z systemu
 PACKAGES_REMOVE=(
     nano konqueror plasma-browser-integration plasma-vault krdp krfb
     kontact kmail kontrast plasma-welcome kaddressbook
@@ -376,7 +375,6 @@ for pkg in "${PACKAGES_REMOVE[@]}"; do
 done
 sudo apt-get autoremove --purge -yq || true
 
-# Czyszczenie pozostałości po usuniętych programach z katalogu domowego
 rm -rf ~/.local/share/akonadi ~/.local/share/kmail2 ~/.local/share/local-mail ~/.local/share/contacts ~/.local/share/korganizer ~/.local/share/akregator ~/.local/share/kontact ~/.local/share/konqueror
 rm -rf ~/.config/akonadi* ~/.config/kmail* ~/.config/kontact* ~/.config/korganizer* ~/.config/kaddressbook* ~/.config/akregator* ~/.config/emailidentities ~/.config/mailtransports
 rm -rf ~/.cache/akonadi* ~/.cache/kmail* ~/.cache/kontact* ~/.cache/korganizer* ~/.cache/kaddressbook* ~/.cache/akregator* ~/.cache/konqueror*
@@ -408,7 +406,6 @@ PACKAGES_INSTALL=(
 wait_for_apt
 if ! sudo apt-get install -yq "${PACKAGES_INSTALL[@]}"; then
     for pkg in "${PACKAGES_INSTALL[@]}"; do
-        # shellcheck disable=SC2024 # redirect target is in /tmp, writable by the invoking user; sudo only needs to elevate apt-get
         if ! sudo apt-get install -yq "$pkg" > "/tmp/install-${pkg}.log" 2>&1; then
             FAILED_PACKAGES+=("$pkg")
         fi
@@ -510,13 +507,31 @@ if [[ ${#DEB_FILES[@]} -gt 0 ]]; then
     done
 fi
 
-LSFG_TMP="$(mktemp -d)"
-LSFG_URL="$(curl -fsSL https://builds.lsfg-vk.dev/ | grep -oE 'https://[^"'"'"']+linux[^"'"'"']*\.tar\.xz' | head -n1 || true)"
-if [[ -n "$LSFG_URL" ]] && curl -fsSL -o "$LSFG_TMP/lsfg-vk.tar.xz" "$LSFG_URL"; then
-    mkdir -p "$HOME/.local"
-    tar -xf "$LSFG_TMP/lsfg-vk.tar.xz" -C "$HOME/.local" || true
+wait_for_apt
+sudo apt-get install -yq \
+    curl \
+    llvm clang clang-tools clang-tidy \
+    qt6-base-dev qt6-base-dev-tools \
+    qt6-tools-dev qt6-tools-dev-tools \
+    qt6-declarative-dev qt6-declarative-dev-tools || true
+
+LSFG_SRC_DIR="$(mktemp -d)"
+if git clone --depth=1 https://git.lsfg-vk.dev/lsfg-vk.git "$LSFG_SRC_DIR/lsfg-vk"; then
+    (
+        cd "$LSFG_SRC_DIR/lsfg-vk"
+        cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DLSFGVK_BUILD_UI=ON
+        cmake --build build
+        sudo cmake --install build
+    ) || log_warn "Nie udało się zbudować lsfg-vk ze źródeł." "Failed to build lsfg-vk from source."
+else
+    log_warn "Nie udało się sklonować repozytorium lsfg-vk." "Failed to clone the lsfg-vk repository."
 fi
-rm -rf "$LSFG_TMP"
+rm -rf "$LSFG_SRC_DIR"
 # ==========================================================
 # ETAP 3/4: OPTYMALIZACJA
 # ==========================================================
