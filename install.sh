@@ -400,9 +400,9 @@ sudo apt-get install -yq linux-firmware || true
 
 PACKAGES_INSTALL=(
     google-chrome-stable brave-origin thunderbird qbittorrent
-    libreoffice gmic mixxx kdenlive soundconverter gimp krita audacity
+    libreoffice gmic mixxx kdenlive soundconverter gimp audacity
     vim dconf-editor hunspell-pl bleachbit profile-sync-daemon git build-essential
-    unrar-free mc btrfs-progs exfatprogs ntfs-3g os-prober
+    unrar-free mc btrfs-progs exfatprogs ntfs-3g os-prober ghostwriter
     adb fastboot fsarchiver inxi pv rsync qmmp vlc vlc-plugin-access-extra
     p7zip-full makeself zenity innoextract needrestart flatpak timeshift
     python3-defusedxml python3-packaging python3-pip pipx python3-tqdm
