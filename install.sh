@@ -394,9 +394,17 @@ sudo apt-get autoremove -yq || true
 # ==========================================================
 show_progress 4 $TOTAL_STEPS "$MSG_PHASE_2"
 
-PACKAGES_REMOVE=(nano konqueror plasma-browser-integration plasma-vault krdp krfb plasma-thunderbolt dragonplayer transmission-qt transmission-gtk pragha elisa kontact kmail kontrast plasma-welcome kaddressbook cosmic-player kdepim-runtime akonadi-server akregator korganizer epiphany decibels gnome-user-docs gnome-contacts gnome-maps gnome-weather gnome-calendar gnome-clocks gnome-music parole rhythmbox showtime kwalletmanager evolution evolution-common evolution-plugins evolution-ews totem exaile mpv)
+TO_REMOVE=(
+nano konqueror plasma-browser-integration plasma-vault
+krdp krfb plasma-thunderbolt dragonplayer transmission-qt
+transmission-gtk pragha elisa kontact kmail kontrast plasma-welcome
+kaddressbook cosmic-player kdepim-runtime akonadi-server akregator korganizer
+epiphany decibels gnome-user-docs gnome-contacts gnome-maps gnome-weather
+gnome-calendar gnome-clocks gnome-music parole rhythmbox showtime kwalletmanager
+evolution evolution-common evolution-plugins evolution-ews totem exaile mpv
+)
 wait_for_apt
-for pkg in "${PACKAGES_REMOVE[@]}"; do
+for pkg in "${TO_REMOVE[@]}"; do
     sudo apt-get purge -yq "$pkg" 2>/dev/null || true
 done
 sudo apt-get autoremove --purge -yq || true
