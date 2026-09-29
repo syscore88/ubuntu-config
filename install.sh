@@ -240,6 +240,25 @@ wait_for_apt() {
     done
 }
 
+pkg_installed() {
+    [[ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null)" == ii* ]]
+}
+
+install_missing() {
+    local -a opts=() missing=()
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == -* ]]; then
+            opts+=("$arg")
+        elif ! pkg_installed "$arg"; then
+            missing+=("$arg")
+        fi
+    done
+    if (( ${#missing[@]} > 0 )); then
+        sudo apt-get install "${opts[@]}" "${missing[@]}"
+    fi
+}
+
 disable_packagekit
 
 safe_apt_update() {
@@ -275,11 +294,18 @@ safe_apt_update() {
 add_ppa_and_install() {
     local ppa="$1"; shift
     local packages=("$@")
+
+    local p all_installed=1
+    for p in "${packages[@]}"; do
+        pkg_installed "$p" || all_installed=0
+    done
+    [[ "$all_installed" -eq 1 ]] && return 0
+
     if ! command -v add-apt-repository &>/dev/null; then return 1; fi
     if ! sudo add-apt-repository -y "ppa:$ppa" 2>/dev/null; then return 1; fi
 
     wait_for_apt
-    if sudo apt-get update -yq && sudo apt-get install -yq "${packages[@]}"; then
+    if sudo apt-get update -yq && install_missing -yq "${packages[@]}"; then
         return 0
     fi
 
@@ -313,7 +339,7 @@ show_progress 1 $TOTAL_STEPS "$MSG_PHASE_1"
 wait_for_apt
 safe_apt_update
 for pkg in curl wget gnupg pciutils dconf-cli; do
-    sudo apt-get install -yq "$pkg" || true
+    install_missing -yq "$pkg" || true
 done
 sudo mkdir -p /etc/apt/keyrings
 sudo chmod 755 /etc/apt/keyrings
@@ -389,7 +415,7 @@ rm -rf ~/.cache/{epiphany,decibels,gnome-user-docs,gnome-contacts,gnome-maps,gno
 command -v dconf &>/dev/null && dconf reset -f /org/gnome/evolution/ || true
 
 wait_for_apt
-sudo apt-get install -yq linux-firmware || true
+install_missing -yq linux-firmware || true
 
 PACKAGES_INSTALL=(
     google-chrome-stable brave-origin thunderbird qbittorrent
@@ -411,9 +437,9 @@ PACKAGES_INSTALL=(
 )
 
 wait_for_apt
-if ! sudo apt-get install -yq "${PACKAGES_INSTALL[@]}"; then
+if ! install_missing -yq "${PACKAGES_INSTALL[@]}"; then
     for pkg in "${PACKAGES_INSTALL[@]}"; do
-        if ! sudo apt-get install -yq "$pkg" > "/tmp/install-${pkg}.log" 2>&1; then
+        if ! install_missing -yq "$pkg" > "/tmp/install-${pkg}.log" 2>&1; then
             FAILED_PACKAGES+=("$pkg")
         fi
     done
@@ -423,8 +449,8 @@ show_progress 5 $TOTAL_STEPS "$MSG_PHASE_2"
 
 if command -v flatpak &>/dev/null; then
     sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
-    sudo flatpak install -y flathub com.github.tchx84.Flatseal || true
-    sudo flatpak install -y flathub it.mijorus.gearlever || true
+    flatpak info com.github.tchx84.Flatseal &>/dev/null || sudo flatpak install -y flathub com.github.tchx84.Flatseal || true
+    flatpak info it.mijorus.gearlever &>/dev/null || sudo flatpak install -y flathub it.mijorus.gearlever || true
 fi
 
 show_progress 6 $TOTAL_STEPS "$MSG_PHASE_2"
@@ -433,11 +459,11 @@ add_ppa_and_install "atareao/telegram" telegram || true
 add_ppa_and_install "zhangsongcui3371/fastfetch" fastfetch || true
 if ! add_ppa_and_install "stebbins/handbrake-releases" handbrake handbrake-cli; then
     wait_for_apt
-    sudo apt-get install -yq handbrake handbrake-cli || true
+    install_missing -yq handbrake handbrake-cli || true
 fi
 
 wait_for_apt
-if ! sudo apt-get install -yq cdemu-daemon cdemu-client; then
+if ! install_missing -yq cdemu-daemon cdemu-client; then
     add_ppa_and_install "cdemu/ppa" cdemu-daemon cdemu-client || true
 fi
 
@@ -457,7 +483,7 @@ done
 pkill -f gcdemu 2>/dev/null || true
 
 wait_for_apt
-sudo apt-get install -yq wine wine64 || true
+install_missing -yq wine wine64 || true
 
 show_progress 7 $TOTAL_STEPS "$MSG_PHASE_2"
 
@@ -473,7 +499,7 @@ echo "$VGA_INFO" | grep -iq "Intel"  && HAS_INTEL=1
 wait_for_apt
 
 if [[ "$HAS_AMD" -eq 1 || "$HAS_INTEL" -eq 1 || ( "$HAS_NVIDIA" -eq 0 && "$HAS_AMD" -eq 0 && "$HAS_INTEL" -eq 0 ) ]]; then
-    sudo apt-get install -yq libgl1-mesa-dri:i386 mesa-vulkan-drivers:i386 || true
+    install_missing -yq libgl1-mesa-dri:i386 mesa-vulkan-drivers:i386 || true
 fi
 [[ "$HAS_AMD" -eq 1 ]]   && add_module "amdgpu"
 [[ "$HAS_INTEL" -eq 1 ]] && add_module "i915"
@@ -481,7 +507,7 @@ fi
 if [[ "$HAS_NVIDIA" -eq 1 ]]; then
     NVIDIA_BRANCH=$(dpkg -l 2>/dev/null | grep -oP '^ii\s+nvidia-driver-\K[0-9]+' | sort -un | tail -1)
     if [[ -n "$NVIDIA_BRANCH" ]]; then
-        sudo apt-get install -yq "libnvidia-gl-${NVIDIA_BRANCH}:i386" || true
+        install_missing -yq "libnvidia-gl-${NVIDIA_BRANCH}:i386" || true
     fi
     add_module "nvidia"
     add_module "nvidia_modeset"
@@ -491,7 +517,7 @@ fi
 
 sudo update-initramfs -u || true
 wait_for_apt
-sudo apt-get install -yq "linux-headers-$(uname -r)" || true
+install_missing -yq "linux-headers-$(uname -r)" || true
 
 show_progress 8 $TOTAL_STEPS "$MSG_PHASE_2"
 
@@ -499,8 +525,9 @@ mkdir -p "$DEB_DIR"
 download_deb() { wget -q --timeout=30 -O "$3" "$2" || rm -f "$3"; }
 get_github_deb_url() { curl -sfL "https://api.github.com/repos/${1}/releases/latest" | grep "browser_download_url.*${2}" | cut -d '"' -f 4 || true; }
 
-download_deb "Discord" "https://discord.com/api/download?platform=linux&format=deb" "$DEB_DIR/discord.deb"
-OPENCODE_URL=$(get_github_deb_url "anomalyco/opencode" "opencode-desktop-linux-amd64\\.deb")
+pkg_installed discord || download_deb "Discord" "https://discord.com/api/download?platform=linux&format=deb" "$DEB_DIR/discord.deb"
+OPENCODE_URL=""
+pkg_installed opencode-desktop || OPENCODE_URL=$(get_github_deb_url "anomalyco/opencode" "opencode-desktop-linux-amd64\\.deb")
 [[ -n "$OPENCODE_URL" ]] && download_deb "opencode-desktop" "$OPENCODE_URL" "$DEB_DIR/opencode-desktop.deb"
 
 add_ppa_and_install "faugus/faugus-launcher" faugus-launcher
@@ -563,7 +590,7 @@ show_progress 9 $TOTAL_STEPS "$MSG_PHASE_3"
 restore_packagekit
 
 wait_for_apt
-sudo apt-get install -yq virt-manager qemu-system qemu-utils libvirt-daemon-system libvirt-clients ovmf dnsmasq bluetooth bluez bluez-firmware bluez-tools ufw || true
+install_missing -yq virt-manager qemu-system qemu-utils libvirt-daemon-system libvirt-clients ovmf dnsmasq bluetooth bluez bluez-firmware bluez-tools ufw || true
 
 if command -v dconf &>/dev/null; then
     dconf load /org/virt-manager/virt-manager/ <<'DCONFEOF'
