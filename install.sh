@@ -423,7 +423,7 @@ install_missing -yq linux-firmware || true
 
 PACKAGES_INSTALL=(
     google-chrome-stable brave-origin thunderbird qbittorrent
-    libreoffice gmic mixxx kdenlive soundconverter gimp audacity
+    libreoffice gmic gimp-gmic mixxx kdenlive soundconverter gimp audacity
     vim dconf-editor hunspell-pl bleachbit profile-sync-daemon git build-essential
     unrar-free mc btrfs-progs exfatprogs ntfs-3g os-prober ghostwriter
     adb fastboot fsarchiver inxi pv rsync qmmp vlc vlc-plugin-access-extra
@@ -655,6 +655,7 @@ done
 sudo systemctl enable fstrim.timer || true
 sudo journalctl --vacuum-time=2d || true
 sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub || true
+grep -q 'mitigations=off' /etc/default/grub || sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 mitigations=off"/' /etc/default/grub || true
 sudo update-grub || true
 
 show_progress 11 $TOTAL_STEPS "$MSG_PHASE_3"
