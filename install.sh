@@ -401,8 +401,7 @@ transmission-gtk pragha elisa kontact kmail kontrast plasma-welcome
 kaddressbook cosmic-player kdepim-runtime akonadi-server akregator
 korganizer epiphany-browser decibels gnome-user-docs gnome-contacts 
 gnome-maps gnome-weather gnome-calendar gnome-clocks gnome-music
-parole rhythmbox showtime kwalletmanager evolution evolution-common 
-evolution-plugins evolution-ews totem exaile mpv juk
+parole rhythmbox showtime kwalletmanager totem exaile mpv juk
 )
 wait_for_apt
 for pkg in "${TO_REMOVE[@]}"; do
