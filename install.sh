@@ -395,7 +395,7 @@ sudo apt-get autoremove -yq || true
 show_progress 4 $TOTAL_STEPS "$MSG_PHASE_2"
 
 TO_REMOVE=(
-nano konqueror plasma-browser-integration plasma-vault
+konqueror plasma-browser-integration plasma-vault
 krfb plasma-thunderbolt dragonplayer transmission-qt
 transmission-gtk pragha elisa kontact kmail kontrast plasma-welcome
 kaddressbook cosmic-player kdepim-runtime akonadi-server akregator
