@@ -424,7 +424,7 @@ install_missing -yq linux-firmware || true
 
 PACKAGES_INSTALL=(
     google-chrome-stable brave-origin thunderbird qbittorrent
-    libreoffice gmic gimp-gmic mixxx kdenlive soundconverter gimp audacity
+    libreoffice krita krita-l10n mixxx kdenlive soundconverter gimp audacity
     vim dconf-editor hunspell-pl bleachbit profile-sync-daemon git build-essential
     unrar-free mc btrfs-progs exfatprogs ntfs-3g os-prober ghostwriter
     adb fastboot fsarchiver inxi pv rsync qmmp vlc vlc-plugin-access-extra
