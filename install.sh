@@ -1,7 +1,7 @@
 #!/bin/bash
-# ==========================================================
-# KOMPLEKSOWY SKRYPT KONFIGURACYJNY SYSTEMU LINUX Ubuntu
-# ==========================================================
+# =========================================
+# KOMPLEKSOWY SKRYPT KONFIGURACYJNY Ubuntu
+# =========================================
 
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -137,8 +137,6 @@ show_progress() {
     local msg=$3
     local percent=$(( step * 100 / total ))
 
-    # Szerokość terminala czytana bezpośrednio z /dev/tty
-    # (stdout/stderr skryptu są przekierowane do pliku logu, więc tput by tu zawiódł)
     local cols
     cols=$(stty size </dev/tty 2>/dev/null || true)
     cols="${cols##* }"
