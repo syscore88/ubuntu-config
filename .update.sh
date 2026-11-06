@@ -31,7 +31,7 @@ if [ "$SCRIPT_LANG" = "pl" ]; then
 else
     MSG_TITLE="                   SYSTEM MAINTENANCE                   "
     MSG_ASK_PASS="Please enter the administrator (sudo) password:"
-    MSG_PHASE_UPDATE="[1/2]          Otimization..."
+    MSG_PHASE_UPDATE="[1/2]          Optimization..."
     MSG_PHASE_CLEAN_SYS="[2/2] System cleanup..."
     MSG_DONE="             SYSTEM MAINTENANCE COMPLETE!           "
     MSG_RESTART_WARN="WARNING: A system restart is recommended"
