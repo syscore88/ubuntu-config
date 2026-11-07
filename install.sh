@@ -434,7 +434,7 @@ PACKAGES_INSTALL=(
     libayatana-appindicator3-1 gamemode vulkan-tools mangohud
     vkd3d-compiler winetricks gcc make cmake meson ninja-build
     gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
-    zsh zsh-syntax-highlighting zsh-autosuggestions
+    zsh zsh-syntax-highlighting zsh-autosuggestions zram-tools
     pkg-config libvulkan-dev mesa-common-dev gnome-disk-utility
     g++ clang llvm libgl1-mesa-dev qt6-tools-dev
     qt6-qpa-plugins libqt6quick6 qml6-module-qtquick-controls qml6-module-qtquick-layouts
