@@ -388,6 +388,43 @@ done
 sudo mkdir -p /etc/apt/keyrings
 sudo chmod 755 /etc/apt/keyrings
 
+GPU_TYPE="unknown"
+HYBRID_GPU=false
+GPU_VENDORS=()
+GPU_UNKNOWN_PKGS=(
+    libgl1-mesa-dri:amd64 libgl1-mesa-dri:i386
+    mesa-vulkan-drivers:amd64 mesa-vulkan-drivers:i386
+    libglx-mesa0:amd64 libglx-mesa0:i386 mesa-opencl-icd:amd64 mesa-opencl-icd:i386
+    vulkan-tools libvulkan-dev libgl1-mesa-dev mesa-common-dev
+)
+if command -v lspci &>/dev/null; then
+    GPU_INFO=$(lspci | grep -i -E "vga|3d|display" || true)
+
+    echo "$GPU_INFO" | grep -qi "nvidia"      && GPU_VENDORS+=("nvidia")
+    echo "$GPU_INFO" | grep -qi -E "\b(amd|ati)\b|advanced micro devices|radeon" && GPU_VENDORS+=("amd")
+    echo "$GPU_INFO" | grep -qi "intel"       && GPU_VENDORS+=("intel")
+
+    TOTAL_KNOWN=${#GPU_VENDORS[@]}
+
+    if [ -z "$GPU_INFO" ] || [ "$TOTAL_KNOWN" -eq 0 ]; then
+        HYBRID_GPU=false
+        for pkg in "${GPU_UNKNOWN_PKGS[@]}"; do
+            pkg_installed "$pkg" || install_missing -yq "$pkg" || true
+        done
+    elif [ "$TOTAL_KNOWN" -ge 2 ]; then
+        HYBRID_GPU=true
+        GPU_TYPE="$(IFS=+; echo "${GPU_VENDORS[*]}")"
+        log_info "Wykryto hybrydowy układ graficzny (HYBRID_GPU=$HYBRID_GPU): $GPU_TYPE" "Detected a hybrid GPU setup (HYBRID_GPU=$HYBRID_GPU): $GPU_TYPE"
+    else
+        HYBRID_GPU=false
+        GPU_TYPE="${GPU_VENDORS[0]}"
+    fi
+else
+    for pkg in "${GPU_UNKNOWN_PKGS[@]}"; do
+        pkg_installed "$pkg" || install_missing -yq "$pkg" || true
+    done
+fi
+
 if [ ! -f /etc/apt/keyrings/google-chrome.gpg ]; then
     curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
         | sudo gpg --dearmor --yes -o /etc/apt/keyrings/google-chrome.gpg
@@ -469,7 +506,7 @@ command -v dconf &>/dev/null && dconf reset -f /org/gnome/evolution/ || true
 wait_for_apt
 install_missing -yq linux-firmware || true
 
-PACKAGES_INSTALL=(
+SYSTEM_PKGS=(
     google-chrome-stable brave-origin qbittorrent
     libreoffice krita krita-l10n mixxx kdenlive soundconverter gimp audacity
     vim dconf-editor hunspell-pl bleachbit profile-sync-daemon git build-essential
@@ -477,19 +514,47 @@ PACKAGES_INSTALL=(
     adb fastboot fsarchiver inxi pv rsync qmmp vlc vlc-plugin-access-extra
     p7zip-full makeself zenity innoextract needrestart flatpak timeshift
     python3-defusedxml python3-packaging python3-pip pipx python3-tqdm
-    libayatana-appindicator3-1 gamemode vulkan-tools mangohud
+    libayatana-appindicator3-1 gamemode mangohud
     vkd3d-compiler winetricks gcc make cmake meson ninja-build
-    gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly ffmpeg x264 gstreamer1.0-libav libavcodec-extra
     zsh zsh-syntax-highlighting zsh-autosuggestions zram-tools
-    pkg-config libvulkan-dev mesa-common-dev gnome-disk-utility
-    g++ clang llvm libgl1-mesa-dev qt6-tools-dev
-    qt6-qpa-plugins libqt6quick6 qml6-module-qtquick-controls qml6-module-qtquick-layouts
-    qml6-module-qtquick-window qml6-module-qtquick-dialogs qml6-module-qtqml-workerscript
-    qml6-module-qtquick-templates qml6-module-qt-labs-folderlistmodel
+    pkg-config gnome-disk-utility g++ clang llvm
+    wine wine64
 )
 
+PKGS_32BIT=(
+    libpulse0:i386 libopenal1:i386 mangohud:i386 wine32:i386
+    libgamemode0:i386 libgamemodeauto0:i386
+    libpipewire-0.3-0t64:i386 pipewire-alsa:i386 libasound2-plugins:i386
+    libxrandr2:i386 libxrender1:i386
+)
+
+PKGS_CODECS=(
+    gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+    ffmpeg x264 gstreamer1.0-libav libavcodec-extra
+)
+
+for vendor in "${GPU_VENDORS[@]}"; do
+    case "$vendor" in
+        "nvidia")
+            NVIDIA_BRANCH=$(dpkg -l 2>/dev/null | grep -oP '^ii\s+nvidia-driver-\K[0-9]+' | sort -un | tail -1 || true)
+            SYSTEM_PKGS+=(vulkan-tools libvulkan-dev libgl1-mesa-dev mesa-common-dev nvidia-vaapi-driver:amd64 nvidia-vaapi-driver:i386)
+            if [[ -n "$NVIDIA_BRANCH" ]]; then
+                SYSTEM_PKGS+=("libnvidia-gl-${NVIDIA_BRANCH}:i386" "libnvidia-compute-${NVIDIA_BRANCH}:amd64" "libnvidia-compute-${NVIDIA_BRANCH}:i386")
+            fi
+            ;;
+        "amd")    SYSTEM_PKGS+=(libgl1-mesa-dri:amd64 libgl1-mesa-dri:i386 mesa-vulkan-drivers:amd64 mesa-vulkan-drivers:i386 libglx-mesa0:amd64 libglx-mesa0:i386 vulkan-tools libvulkan-dev libgl1-mesa-dev mesa-common-dev mesa-va-drivers:amd64 mesa-va-drivers:i386 mesa-opencl-icd:amd64 mesa-opencl-icd:i386) ;;
+        "intel")  SYSTEM_PKGS+=(libgl1-mesa-dri:amd64 libgl1-mesa-dri:i386 mesa-vulkan-drivers:amd64 mesa-vulkan-drivers:i386 libglx-mesa0:amd64 libglx-mesa0:i386 vulkan-tools libvulkan-dev libgl1-mesa-dev mesa-common-dev intel-media-va-driver-non-free:amd64 intel-media-va-driver-non-free:i386 intel-opencl-icd) ;;
+    esac
+done
+
+if [ "${#GPU_VENDORS[@]}" -gt 0 ]; then
+    readarray -t SYSTEM_PKGS < <(printf '%s\n' "${SYSTEM_PKGS[@]}" | awk '!seen[$0]++')
+fi
+
 wait_for_apt
-install_missing -yq "${PACKAGES_INSTALL[@]}" || true
+install_missing -yq "${SYSTEM_PKGS[@]}" || true
+install_missing -yq "${PKGS_32BIT[@]}" || true
+install_missing -yq "${PKGS_CODECS[@]}" || true
 
 show_progress 5 $TOTAL_STEPS "$MSG_PHASE_2"
 
@@ -529,56 +594,22 @@ for f in /etc/xdg/autostart/gcdemu.desktop /etc/xdg/autostart/cdemu.desktop /usr
 done
 pkill -f gcdemu 2>/dev/null || true
 
-wait_for_apt
-install_missing -yq wine wine64 || true
-
 show_progress 7 $TOTAL_STEPS "$MSG_PHASE_2"
 
-VGA_INFO=$(lspci -nn | grep -iE "VGA|3D|Display" || true)
 MODULES_FILE="/etc/initramfs-tools/modules"
 add_module() { grep -q "^$1" "$MODULES_FILE" || echo "$1" | sudo tee -a "$MODULES_FILE" > /dev/null; }
 
-HAS_NVIDIA=0; HAS_AMD=0; HAS_INTEL=0
-echo "$VGA_INFO" | grep -iq "NVIDIA" && HAS_NVIDIA=1
-echo "$VGA_INFO" | grep -iq "AMD"    && HAS_AMD=1
-echo "$VGA_INFO" | grep -iq "Intel"  && HAS_INTEL=1
-
-wait_for_apt
-
-if [[ "$HAS_AMD" -eq 1 || "$HAS_INTEL" -eq 1 || ( "$HAS_NVIDIA" -eq 0 && "$HAS_AMD" -eq 0 && "$HAS_INTEL" -eq 0 ) ]]; then
-    install_missing -yq libgl1-mesa-dri:amd64 libgl1-mesa-dri:i386 mesa-vulkan-drivers:amd64 mesa-vulkan-drivers:i386 libglx-mesa0:amd64 libglx-mesa0:i386 || true
-fi
-if [[ "$HAS_AMD" -eq 1 ]]; then
-    install_missing -yq mesa-va-drivers:amd64 || true
-    install_missing -yq mesa-va-drivers:i386 || true
-    install_missing -yq mesa-opencl-icd:amd64 || true
-    install_missing -yq mesa-opencl-icd:i386 || true
-fi
-if [[ "$HAS_INTEL" -eq 1 ]]; then
-    install_missing -yq intel-media-va-driver-non-free:amd64 || true
-    install_missing -yq intel-media-va-driver-non-free:i386 || true
-    install_missing -yq intel-opencl-icd || true
-fi
-if [[ "$HAS_NVIDIA" -eq 0 && "$HAS_AMD" -eq 0 && "$HAS_INTEL" -eq 0 ]]; then
-    install_missing -yq mesa-opencl-icd:amd64 || true
-    install_missing -yq mesa-opencl-icd:i386 || true
-fi
-[[ "$HAS_AMD" -eq 1 ]]   && add_module "amdgpu"
-[[ "$HAS_INTEL" -eq 1 ]] && add_module "i915"
-
-if [[ "$HAS_NVIDIA" -eq 1 ]]; then
-    NVIDIA_BRANCH=$(dpkg -l 2>/dev/null | grep -oP '^ii\s+nvidia-driver-\K[0-9]+' | sort -un | tail -1)
-    if [[ -n "$NVIDIA_BRANCH" ]]; then
-        install_missing -yq "libnvidia-gl-${NVIDIA_BRANCH}:i386" || true
-        install_missing -yq "libnvidia-compute-${NVIDIA_BRANCH}:amd64" || true
-        install_missing -yq "libnvidia-compute-${NVIDIA_BRANCH}:i386" || true
-    fi
-    install_missing -yq nvidia-vaapi-driver:amd64 || true
-    install_missing -yq nvidia-vaapi-driver:i386 || true
+if [[ $GPU_TYPE == *"nvidia"* ]]; then
     add_module "nvidia"
     add_module "nvidia_modeset"
     add_module "nvidia_uvm"
     add_module "nvidia_drm"
+fi
+if [[ $GPU_TYPE == *"amd"* ]]; then
+    add_module "amdgpu"
+fi
+if [[ $GPU_TYPE == *"intel"* ]]; then
+    add_module "i915"
 fi
 
 sudo update-initramfs -u || true
