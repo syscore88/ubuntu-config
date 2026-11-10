@@ -433,7 +433,7 @@ PACKAGES_INSTALL=(
     python3-defusedxml python3-packaging python3-pip pipx python3-tqdm
     libayatana-appindicator3-1 gamemode vulkan-tools mangohud
     vkd3d-compiler winetricks gcc make cmake meson ninja-build
-    gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+    gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly ffmpeg x264 gstreamer1.0-libav libavcodec-extra
     zsh zsh-syntax-highlighting zsh-autosuggestions zram-tools
     pkg-config libvulkan-dev mesa-common-dev gnome-disk-utility
     g++ clang llvm libgl1-mesa-dev qt6-tools-dev
