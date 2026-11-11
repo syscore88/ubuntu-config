@@ -21,78 +21,15 @@ SCRIPT_LANG="$(detect_system_lang)"
 INFO='\033[0;34m'
 SUCCESS='\033[0;32m'
 WARN='\033[0;33m'
-ERROR='\033[0;31m'
+ERR='\033[0;31m'
 NC='\033[0m'
-
-if [[ "$EUID" -eq 0 ]]; then
-    if [[ "$SCRIPT_LANG" == "pl" ]]; then
-        echo -e "${ERROR}[X] Nie uruchamiaj skryptu jako root. Uruchom jako zwykły użytkownik z sudo.${NC}"
-    else
-        echo -e "${ERROR}[X] Do not run this script as root. Run as a normal user with sudo.${NC}"
-    fi
-    exit 1
-fi
-
-printf '\033[?7h\n'
-CURRENT_USER=$(whoami)
-
-RUN0_NOPASSWD_FILE="/etc/polkit-1/rules.d/51-run0-nopasswd.rules"
-USE_RUN0=0
-if ! command -v visudo >/dev/null 2>&1 || sudo --version 2>/dev/null | grep -qi "run0"; then
-    USE_RUN0=1
-fi
-
-SUDO_READY=0
-if [[ "$USE_RUN0" -eq 1 ]]; then
-    sudo tee "$RUN0_NOPASSWD_FILE" > /dev/null << EOF
-polkit.addRule(function(action, subject) {
-    if (subject.user == "$CURRENT_USER") {
-        return polkit.Result.YES;
-    }
-});
-EOF
-    sudo systemctl try-restart polkit 2>/dev/null || true
-    SUDO_READY=1
-else
-    sudo -v
-
-    (
-        set +e
-        trap - ERR
-        while true; do
-            sudo -n true
-            sleep 60
-            kill -0 "$$" 2>/dev/null || exit
-        done
-    ) &
-    SUDO_KEEPALIVE_PID=$!
-
-    SUDOERS_TMP="$(mktemp)"
-    echo "$CURRENT_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_TMP"
-    if sudo visudo -cf "$SUDOERS_TMP" >/dev/null; then
-        sudo install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/99-temp-installer
-        echo "%sudo ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_TMP"
-        sudo visudo -cf "$SUDOERS_TMP" >/dev/null && sudo install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/99_nopasswd || true
-    else
-        rm -f "$SUDOERS_TMP"
-        if [[ "$SCRIPT_LANG" == "pl" ]]; then
-            echo -e "${ERROR}[X] Nieprawidłowa składnia reguły sudoers - przerywam.${NC}"
-        else
-            echo -e "${ERROR}[X] Invalid sudoers rule syntax - aborting.${NC}"
-        fi
-        exit 1
-    fi
-    rm -f "$SUDOERS_TMP"
-    SUDO_READY=1
-fi
 
 TMP_LOG="$(mktemp /tmp/install-log.XXXXXX)"
 LOG_FILE="$HOME/install_error_$(date +%Y%m%d_%H%M%S).log"
+DEB_DIR="/tmp/debs_$$"
 
 exec 3>&1
 exec >>"$TMP_LOG" 2>&1
-
-printf '\033[?7l' >&3
 
 cleanup_on_exit() {
     local exit_code=$?
@@ -104,13 +41,14 @@ cleanup_on_exit() {
         cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null || true
         if [ "$exit_code" -ne 0 ]; then
             if [[ "$SCRIPT_LANG" == "pl" ]]; then
-                echo -e "${ERROR}[X] Wystąpił błąd (kod: $exit_code). Szczegółowy log zapisano w: $LOG_FILE${NC}" >&3
+                echo -e "${ERR}[X] Wystąpił błąd (kod: $exit_code). Szczegółowy log zapisano w: $LOG_FILE${NC}" >&3
             else
-                echo -e "${ERROR}[X] An error occurred (code: $exit_code). Detailed log saved to: $LOG_FILE${NC}" >&3
+                echo -e "${ERR}[X] An error occurred (code: $exit_code). Detailed log saved to: $LOG_FILE${NC}" >&3
             fi
         fi
     fi
     rm -f "$TMP_LOG"
+    rm -rf "$DEB_DIR"
     local do_reboot=0
     [ "$exit_code" -eq 0 ] && [ "${DO_REBOOT:-0}" = "1" ] && do_reboot=1
     if [ "${SUDO_READY:-0}" = "1" ]; then
@@ -126,67 +64,11 @@ _pick_msg() { [[ "$SCRIPT_LANG" == "pl" ]] && echo "$1" || echo "$2"; }
 _log_write() { printf "\r\033[K" >&3; echo -e "$1" >&3; echo -e "$1"; cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null || true; }
 log_info()  { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${INFO}==> $m${NC}"; }
 log_ok()    { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${SUCCESS}[OK] $m${NC}"; }
-log_err()   { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${ERROR}[X] ERROR: $m${NC}"; }
+log_err()   { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${ERR}[X] ERROR: $m${NC}"; }
 log_warn()  { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${WARN}[!] WARN: $m${NC}"; }
 
 trap 'log_err "Błąd w linii $LINENO. Polecenie: $BASH_COMMAND" "Error at line $LINENO. Command: $BASH_COMMAND"' ERR
 
-show_progress() {
-    local step=$1
-    local total=$2
-    local msg=$3
-    local percent=$(( step * 100 / total ))
-
-    local cols
-    cols=$(stty size </dev/tty 2>/dev/null || true)
-    cols="${cols##* }"
-    [[ "$cols" =~ ^[0-9]+$ ]] && (( cols > 0 )) || cols=80
-
-    local bar_width=50
-    local reserved=14
-    if (( cols - reserved < bar_width )); then
-        bar_width=$(( cols - reserved ))
-        (( bar_width < 10 )) && bar_width=10
-    fi
-
-    local overhead=$(( bar_width + reserved ))
-    local avail=$(( cols - overhead ))
-    if (( avail < 5 )); then avail=5; fi
-    if (( ${#msg} > avail )); then
-        msg="${msg:0:$((avail - 3))}..."
-    fi
-
-    local filled=$(( percent * bar_width / 100 ))
-    local empty=$(( bar_width - filled ))
-
-    local bar_filled=""
-    local bar_empty=""
-    if [ $filled -gt 0 ]; then printf -v bar_filled '%*s' "$filled" ''; bar_filled="${bar_filled// /#}"; fi
-    if [ $empty -gt 0 ]; then printf -v bar_empty '%*s' "$empty" ''; bar_empty="${bar_empty// /-}"; fi
-
-    printf "\r\033[K[\033[1;32m%s\033[0;90m%s\033[0m] %3d%% | \033[1;36m%s\033[0m" "$bar_filled" "$bar_empty" "$percent" "$msg" >&3
-}
-
-if [[ "$SCRIPT_LANG" == "pl" ]]; then
-    MSG_PHASE_1="[1/4] Przygotowywanie..."
-    MSG_PHASE_2="[2/4] Instalacja..."
-    MSG_PHASE_3="[3/4] Optymalizacja..."
-    MSG_PHASE_4="[4/4] Finalizowanie..."
-else
-    MSG_PHASE_1="[1/4] Preparing..."
-    MSG_PHASE_2="[2/4] Installing..."
-    MSG_PHASE_3="[3/4] Optimizing..."
-    MSG_PHASE_4="[4/4] Finalizing..."
-fi
-
-TOTAL_STEPS=12
-FAILED_PACKAGES=()
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
-DEB_DIR="/tmp/debs_$$"
-
-source /etc/os-release
-OS_CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
-echo "Wykryty system: ${PRETTY_NAME:-nieznany}, codename: ${OS_CODENAME:-nieznany}"
 # ==========================================================
 # PACKAGEKIT + BLOKADA MENEDŻERA PAKIETÓW
 # ==========================================================
@@ -238,47 +120,153 @@ wait_for_apt() {
     done
 }
 
+show_progress() {
+    local step=$1
+    local total=$2
+    local msg=$3
+    local percent=$(( step * 100 / total ))
+
+    local cols
+    cols=$(stty size </dev/tty 2>/dev/null || true)
+    cols="${cols##* }"
+    [[ "$cols" =~ ^[0-9]+$ ]] && (( cols > 0 )) || cols=80
+
+    local bar_width=50
+    local reserved=14
+    if (( cols - reserved < bar_width )); then
+        bar_width=$(( cols - reserved ))
+        (( bar_width < 10 )) && bar_width=10
+    fi
+
+    local overhead=$(( bar_width + reserved ))
+    local avail=$(( cols - overhead ))
+    if (( avail < 5 )); then avail=5; fi
+    if (( ${#msg} > avail )); then
+        msg="${msg:0:$((avail - 3))}..."
+    fi
+
+    local filled=$(( percent * bar_width / 100 ))
+    local empty=$(( bar_width - filled ))
+
+    local bar_filled=""
+    local bar_empty=""
+    if [ $filled -gt 0 ]; then printf -v bar_filled '%*s' "$filled" ''; bar_filled="${bar_filled// /#}"; fi
+    if [ $empty -gt 0 ]; then printf -v bar_empty '%*s' "$empty" ''; bar_empty="${bar_empty// /-}"; fi
+
+    printf "\r\033[K[\033[1;32m%s\033[0;90m%s\033[0m] %3d%% | \033[1;36m%s\033[0m" "$bar_filled" "$bar_empty" "$percent" "$msg" >&3
+}
+
+if [[ "$SCRIPT_LANG" == "pl" ]]; then
+    MSG_PHASE_1="[1/4] Przygotowywanie..."
+    MSG_PHASE_2="[2/4] Instalacja..."
+    MSG_PHASE_3="[3/4] Optymalizacja..."
+    MSG_PHASE_4="[4/4] Finalizowanie..."
+else
+    MSG_PHASE_1="[1/4] Preparing..."
+    MSG_PHASE_2="[2/4] Installing..."
+    MSG_PHASE_3="[3/4] Optimizing..."
+    MSG_PHASE_4="[4/4] Finalizing..."
+fi
+
+TOTAL_STEPS=12
+FAILED_PACKAGES=()
+
+if [[ "$EUID" -eq 0 ]]; then
+    if [[ "$SCRIPT_LANG" == "pl" ]]; then
+        echo -e "${ERR}[X] Nie uruchamiaj skryptu jako root. Uruchom jako zwykły użytkownik z sudo.${NC}" >&3
+    else
+        echo -e "${ERR}[X] Do not run this script as root. Run as a normal user with sudo.${NC}" >&3
+    fi
+    exit 1
+fi
+
+CURRENT_USER=$(whoami)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+
+printf '\033[?7h\n' >&3
+
+RUN0_NOPASSWD_FILE="/etc/polkit-1/rules.d/51-run0-nopasswd.rules"
+USE_RUN0=0
+if ! command -v visudo >/dev/null 2>&1 || sudo --version 2>/dev/null | grep -qi "run0"; then
+    USE_RUN0=1
+fi
+
+SUDO_READY=0
+if [[ "$USE_RUN0" -eq 1 ]]; then
+    sudo tee "$RUN0_NOPASSWD_FILE" > /dev/null << EOF
+polkit.addRule(function(action, subject) {
+    if (subject.user == "$CURRENT_USER") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+    sudo systemctl try-restart polkit 2>/dev/null || true
+    SUDO_READY=1
+else
+    sudo -v
+
+    (
+        set +e
+        trap - ERR
+        while true; do
+            sudo -n true
+            sleep 60
+            kill -0 "$$" 2>/dev/null || exit
+        done
+    ) &
+    SUDO_KEEPALIVE_PID=$!
+
+    SUDOERS_TMP="$(mktemp)"
+    echo "$CURRENT_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_TMP"
+    if sudo visudo -cf "$SUDOERS_TMP" >/dev/null; then
+        sudo install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/99-temp-installer
+        echo "%sudo ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_TMP"
+        sudo visudo -cf "$SUDOERS_TMP" >/dev/null && sudo install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/99_nopasswd || true
+    else
+        rm -f "$SUDOERS_TMP"
+        if [[ "$SCRIPT_LANG" == "pl" ]]; then
+            echo -e "${ERR}[X] Nieprawidłowa składnia reguły sudoers - przerywam.${NC}" >&3
+        else
+            echo -e "${ERR}[X] Invalid sudoers rule syntax - aborting.${NC}" >&3
+        fi
+        exit 1
+    fi
+    rm -f "$SUDOERS_TMP"
+    SUDO_READY=1
+fi
+
+printf '\033[?7l' >&3
+
+source /etc/os-release
+OS_CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+echo "Wykryty system: ${PRETTY_NAME:-nieznany}, codename: ${OS_CODENAME:-nieznany}"
+
+# ==========================================================
+# ETAP 1/4: PRZYGOTOWYWANIE
+# ==========================================================
+show_progress 0 $TOTAL_STEPS "$MSG_PHASE_1"
+
+disable_packagekit
+
 pkg_installed() {
     [[ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null)" == ii* ]]
 }
 
-mark_failed() {
-    local p f
-    for p in "$@"; do
-        for f in "${FAILED_PACKAGES[@]}"; do
-            [[ "$f" == "$p" ]] && continue 2
-        done
-        FAILED_PACKAGES+=("$p")
-    done
-}
-
-install_missing() {
-    local -a opts=() valid=()
-    local arg p rc=0
-    for arg in "$@"; do
-        if [[ "$arg" == -* ]]; then
-            opts+=("$arg")
-        elif pkg_installed "$arg"; then
-            continue
+install_apt_pkgs() {
+    wait_for_apt
+    local valid_pkgs=()
+    for pkg in "$@"; do
+        pkg_installed "$pkg" && continue
+        if apt-cache show "$pkg" &>/dev/null; then
+            valid_pkgs+=("$pkg")
         else
-            valid+=("$arg")
+            FAILED_PACKAGES+=("$pkg")
         fi
     done
-    if (( ${#valid[@]} > 0 )); then
-        if ! sudo apt-get install "${opts[@]}" "${valid[@]}"; then
-            for p in "${valid[@]}"; do
-                pkg_installed "$p" && continue
-                if ! sudo apt-get install "${opts[@]}" "$p"; then
-                    mark_failed "$p"
-                    rc=1
-                fi
-            done
-        fi
-    fi
-    return "$rc"
+    for pkg in "${valid_pkgs[@]}"; do
+        sudo apt-get install -yq "$pkg" || FAILED_PACKAGES+=("$pkg")
+    done
 }
-
-disable_packagekit
 
 add_ppa_and_install() {
     local ppa="$1"; shift
@@ -290,50 +278,59 @@ add_ppa_and_install() {
     done
     [[ "$all_installed" -eq 1 ]] && return 0
 
-    if ! command -v add-apt-repository &>/dev/null; then mark_failed "${packages[@]}"; return 1; fi
-    if ! sudo add-apt-repository -y "ppa:$ppa" 2>/dev/null; then mark_failed "${packages[@]}"; return 1; fi
+    if ! command -v add-apt-repository &>/dev/null; then
+        log_warn "Brak polecenia add-apt-repository (dla ppa:$ppa)" "Command add-apt-repository not found (for ppa:$ppa)"
+        FAILED_PACKAGES+=("${packages[@]}")
+        return 1
+    fi
+
+    wait_for_apt
+    if ! sudo -E env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository -y "ppa:$ppa"; then
+        if [[ -n "${OS_CODENAME:-}" ]]; then
+            local ppa_owner="${ppa%%/*}"
+            local ppa_name="${ppa#*/}"
+            local list_file="/etc/apt/sources.list.d/${ppa_owner}-ubuntu-${ppa_name}-${OS_CODENAME}.list"
+            echo "deb https://ppa.launchpadcontent.net/${ppa_owner}/${ppa_name}/ubuntu ${OS_CODENAME} main" | sudo tee "$list_file" >/dev/null
+            sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 2>/dev/null || true
+        else
+            log_warn "Nie udało się dodać ppa:$ppa" "Failed to add ppa:$ppa"
+            FAILED_PACKAGES+=("${packages[@]}")
+            return 1
+        fi
+    fi
 
     wait_for_apt
     sudo apt-get update -yq || true
-    if install_missing -yq "${packages[@]}"; then
+    install_apt_pkgs "${packages[@]}"
+
+    all_installed=1
+    for p in "${packages[@]}"; do
+        if ! pkg_installed "$p"; then
+            all_installed=0
+        fi
+    done
+    if [[ "$all_installed" -eq 1 ]]; then
         return 0
     fi
 
-    mark_failed "${packages[@]}"
-    sudo add-apt-repository --remove -y "ppa:$ppa" 2>/dev/null || true
+    sudo -E env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository --remove -y "ppa:$ppa" || true
     wait_for_apt
     sudo apt-get update -yq || true
     return 1
 }
-
-# ==========================================================
-# ETAP 1/4: PRZYGOTOWYWANIE
-# ==========================================================
-show_progress 0 $TOTAL_STEPS "$MSG_PHASE_1"
-
-if [[ -f "$SCRIPT_DIR/.update.sh" ]]; then
-    cp -af "$SCRIPT_DIR/.update.sh" ~/.update.sh
-    chmod +x ~/.update.sh
-fi
 
 wait_for_apt
 sudo sed -i '/cdrom/s/^/#/' /etc/apt/sources.list 2>/dev/null || true
 sudo dpkg --add-architecture i386 || true
 
 if command -v add-apt-repository &>/dev/null; then
-    sudo add-apt-repository -y universe  2>/dev/null || true
-    sudo add-apt-repository -y multiverse 2>/dev/null || true
+    sudo -E env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository -y universe || true
+    sudo -E env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository -y multiverse || true
 fi
-
-show_progress 1 $TOTAL_STEPS "$MSG_PHASE_1"
 
 wait_for_apt
 sudo apt-get update -yq || true
-for pkg in curl wget gnupg pciutils dconf-cli; do
-    install_missing -yq "$pkg" || true
-done
-sudo mkdir -p /etc/apt/keyrings
-sudo chmod 755 /etc/apt/keyrings
+install_apt_pkgs curl wget gnupg pciutils dconf-cli software-properties-common
 
 GPU_TYPE="unknown"
 HYBRID_GPU=false
@@ -355,9 +352,7 @@ if command -v lspci &>/dev/null; then
 
     if [ -z "$GPU_INFO" ] || [ "$TOTAL_KNOWN" -eq 0 ]; then
         HYBRID_GPU=false
-        for pkg in "${GPU_UNKNOWN_PKGS[@]}"; do
-            pkg_installed "$pkg" || install_missing -yq "$pkg" || true
-        done
+        install_apt_pkgs "${GPU_UNKNOWN_PKGS[@]}"
     elif [ "$TOTAL_KNOWN" -ge 2 ]; then
         HYBRID_GPU=true
         GPU_TYPE="$(IFS=+; echo "${GPU_VENDORS[*]}")"
@@ -367,10 +362,75 @@ if command -v lspci &>/dev/null; then
         GPU_TYPE="${GPU_VENDORS[0]}"
     fi
 else
-    for pkg in "${GPU_UNKNOWN_PKGS[@]}"; do
-        pkg_installed "$pkg" || install_missing -yq "$pkg" || true
-    done
+    install_apt_pkgs "${GPU_UNKNOWN_PKGS[@]}"
 fi
+
+if [[ -f "$SCRIPT_DIR/.update.sh" ]]; then
+    cp -af "$SCRIPT_DIR/.update.sh" ~/.update.sh
+    chmod +x ~/.update.sh
+fi
+
+if [[ -d "$SCRIPT_DIR/.local" ]]; then
+    mkdir -p ~/.local
+    cp -afT "$SCRIPT_DIR/.local" ~/.local
+fi
+
+if [[ -d "$SCRIPT_DIR/.config" ]]; then
+    mkdir -p ~/.config
+    cp -afT "$SCRIPT_DIR/.config" ~/.config
+fi
+
+show_progress 1 $TOTAL_STEPS "$MSG_PHASE_1"
+
+TO_REMOVE=(
+konqueror plasma-browser-integration plasma-vault
+plasma-thunderbolt dragonplayer transmission-qt
+evolution evolution-ews evolution-data-server
+evolution-bogofilter evolution-spamassassin
+transmission-gtk pragha elisa kontact kmail kontrast plasma-welcome
+kaddressbook cosmic-player kdepim-runtime akonadi-server akregator
+korganizer epiphany-browser decibels gnome-user-docs gnome-contacts
+gnome-maps gnome-weather gnome-calendar gnome-clocks gnome-music
+parole rhythmbox showtime kwalletmanager totem exaile mpv juk
+)
+wait_for_apt
+for pkg in "${TO_REMOVE[@]}"; do
+    sudo apt-get purge -yq "$pkg" || true
+done
+sudo apt-get autoremove --purge -yq || true
+
+if pkg_installed plasma-desktop || pkg_installed plasma-workspace; then
+    mkdir -p ~/.config
+    cat > ~/.config/kwalletrc << 'EOF'
+[Wallet]
+Close When Idle=false
+Close on Screensaver=false
+Default Wallet=kdewallet
+Enabled=false
+First Use=false
+Idle Timeout=10
+Launch Manager=false
+Leave Manager Open=false
+Leave Open=true
+Prompt on Open=false
+Use One Wallet=true
+
+[org.freedesktop.secrets]
+apiEnabled=false
+EOF
+fi
+rm -rf ~/.local/share/akonadi ~/.local/share/kmail2 ~/.local/share/local-mail ~/.local/share/contacts ~/.local/share/korganizer ~/.local/share/akregator ~/.local/share/kontact ~/.local/share/konqueror
+rm -rf ~/.config/akonadi* ~/.config/kmail* ~/.config/kontact* ~/.config/korganizer* ~/.config/kaddressbook* ~/.config/akregator* ~/.config/emailidentities ~/.config/mailtransports
+rm -rf ~/.cache/akonadi* ~/.cache/kmail* ~/.cache/kontact* ~/.cache/korganizer* ~/.cache/kaddressbook* ~/.cache/akregator* ~/.cache/konqueror*
+rm -rf ~/.local/share/{epiphany,decibels,gnome-user-docs,gnome-contacts,gnome-maps,gnome-weather,evolution,gnome-calendar,gnome-clocks,gnome-music,parole,rhythmbox,showtime,dragonplayer,elisa,cosmic-player,transmission,pragha,totem,exaile,mpv,juk}
+rm -rf ~/.config/{epiphany,decibels,gnome-user-docs,gnome-contacts,gnome-maps,gnome-weather,evolution,gnome-calendar,gnome-clocks,gnome-music,parole,rhythmbox,showtime,dragonplayer,elisa,cosmic-player,transmission,pragha,totem,exaile,mpv,juk}
+rm -rf ~/.cache/{epiphany,decibels,gnome-user-docs,gnome-contacts,gnome-maps,gnome-weather,evolution,gnome-calendar,gnome-clocks,gnome-music,parole,rhythmbox,showtime,dragonplayer,elisa,cosmic-player,transmission,pragha,totem,exaile,mpv,juk}
+command -v dconf &>/dev/null && dconf reset -f /org/gnome/evolution/ || true
+
+show_progress 2 $TOTAL_STEPS "$MSG_PHASE_1"
+
+sudo mkdir -p /etc/apt/keyrings
+sudo chmod 755 /etc/apt/keyrings
 
 if [ ! -f /etc/apt/keyrings/google-chrome.gpg ]; then
     curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor --yes -o /etc/apt/keyrings/google-chrome.gpg
@@ -378,17 +438,8 @@ if [ ! -f /etc/apt/keyrings/google-chrome.gpg ]; then
     echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list > /dev/null
 fi
 
-show_progress 2 $TOTAL_STEPS "$MSG_PHASE_1"
-
 sudo mkdir -p /usr/share/keyrings
-sudo rm -f /usr/share/keyrings/brave-browser-archive-keyring.gpg
-BRAVE_KEY_ID="0686B78420038257"
-BRAVE_GNUPGHOME="$(mktemp -d)"
-if ! gpg --homedir "$BRAVE_GNUPGHOME" --keyserver hkps://keyserver.ubuntu.com --recv-keys "$BRAVE_KEY_ID"; then
-    gpg --homedir "$BRAVE_GNUPGHOME" --keyserver hkps://keys.openpgp.org --recv-keys "$BRAVE_KEY_ID" || true
-fi
-gpg --homedir "$BRAVE_GNUPGHOME" --export "$BRAVE_KEY_ID" | sudo tee /usr/share/keyrings/brave-browser-archive-keyring.gpg > /dev/null
-rm -rf "$BRAVE_GNUPGHOME"
+sudo curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
 sudo chmod 644 /usr/share/keyrings/brave-browser-archive-keyring.gpg
 sudo curl -fsSLo /etc/apt/sources.list.d/brave-browser-release.sources https://brave-browser-apt-release.s3.brave.com/brave-browser.sources
 
@@ -404,46 +455,20 @@ fi
 
 show_progress 3 $TOTAL_STEPS "$MSG_PHASE_1"
 
-wait_for_apt
-sudo apt-get update -yq || true
-sudo apt-get upgrade -yq || true
-sudo apt-get autoremove -yq || true
-
 # ==========================================================
 # ETAP 2/4: INSTALACJA
 # ==========================================================
 show_progress 4 $TOTAL_STEPS "$MSG_PHASE_2"
 
-TO_REMOVE=(
-konqueror plasma-browser-integration plasma-vault
-plasma-thunderbolt dragonplayer transmission-qt 
-evolution evolution-ews evolution-data-server 
-evolution-bogofilter evolution-spamassassin
-transmission-gtk pragha elisa kontact kmail kontrast plasma-welcome
-kaddressbook cosmic-player kdepim-runtime akonadi-server akregator
-korganizer epiphany-browser decibels gnome-user-docs gnome-contacts 
-gnome-maps gnome-weather gnome-calendar gnome-clocks gnome-music
-parole rhythmbox showtime kwalletmanager totem exaile mpv juk 
-)
 wait_for_apt
-for pkg in "${TO_REMOVE[@]}"; do
-    sudo apt-get purge -yq "$pkg" 2>/dev/null || true
-done
-sudo apt-get autoremove --purge -yq || true
+sudo apt-get update -yq || true
+sudo apt-get upgrade -yq || true
+sudo apt-get autoremove -yq || true
 
-rm -rf ~/.local/share/akonadi ~/.local/share/kmail2 ~/.local/share/local-mail ~/.local/share/contacts ~/.local/share/korganizer ~/.local/share/akregator ~/.local/share/kontact ~/.local/share/konqueror
-rm -rf ~/.config/akonadi* ~/.config/kmail* ~/.config/kontact* ~/.config/korganizer* ~/.config/kaddressbook* ~/.config/akregator* ~/.config/emailidentities ~/.config/mailtransports
-rm -rf ~/.cache/akonadi* ~/.cache/kmail* ~/.cache/kontact* ~/.cache/korganizer* ~/.cache/kaddressbook* ~/.cache/akregator* ~/.cache/konqueror*
-rm -rf ~/.local/share/{epiphany,decibels,gnome-user-docs,gnome-contacts,gnome-maps,gnome-weather,evolution,gnome-calendar,gnome-clocks,gnome-music,parole,rhythmbox,showtime,epiphany,decibels,dragonplayer,elisa,cosmic-player,transmission,pragha,totem,exaile,mpv,juk}
-rm -rf ~/.config/{epiphany,decibels,gnome-user-docs,gnome-contacts,gnome-maps,gnome-weather,evolution,gnome-calendar,gnome-clocks,gnome-music,parole,rhythmbox,showtime,epiphany,decibels,dragonplayer,elisa,cosmic-player,transmission,pragha,totem,exaile,mpv,juk}
-rm -rf ~/.cache/{epiphany,decibels,gnome-user-docs,gnome-contacts,gnome-maps,gnome-weather,evolution,gnome-calendar,gnome-clocks,gnome-music,parole,rhythmbox,showtime,epiphany,decibels,dragonplayer,elisa,cosmic-player,transmission,pragha,totem,exaile,mpv,juk}
-command -v dconf &>/dev/null && dconf reset -f /org/gnome/evolution/ || true
-
-wait_for_apt
-install_missing -yq linux-firmware || true
+show_progress 5 $TOTAL_STEPS "$MSG_PHASE_2"
 
 SYSTEM_PKGS=(
-    google-chrome-stable brave-origin qbittorrent
+    google-chrome-stable brave-origin telegram-desktop qbittorrent
     libreoffice krita krita-l10n mixxx kdenlive soundconverter gimp audacity
     vim dconf-editor hunspell-pl bleachbit profile-sync-daemon git build-essential
     unrar-free mc btrfs-progs exfatprogs ntfs-3g os-prober ghostwriter
@@ -455,6 +480,12 @@ SYSTEM_PKGS=(
     zsh zsh-syntax-highlighting zsh-autosuggestions zram-tools
     pkg-config gnome-disk-utility g++ clang llvm
     wine wine64
+    handbrake handbrake-cli
+    virt-manager qemu-system qemu-utils libvirt-daemon-system libvirt-clients
+    qt6-qpa-plugins libqt6quick6 qml6-module-qtquick-controls
+    qml6-module-qtquick-layouts qml6-module-qtquick-window
+    qml6-module-qtquick-dialogs qml6-module-qtqml-workerscript
+    qml6-module-qtquick-templates qml6-module-qt-labs-folderlistmodel
 )
 
 PKGS_32BIT=(
@@ -478,7 +509,7 @@ for vendor in "${GPU_VENDORS[@]}"; do
                 SYSTEM_PKGS+=("libnvidia-gl-${NVIDIA_BRANCH}:i386" "libnvidia-compute-${NVIDIA_BRANCH}:amd64" "libnvidia-compute-${NVIDIA_BRANCH}:i386")
             fi
             ;;
-        "amd")    SYSTEM_PKGS+=(libgl1-mesa-dri:amd64 libgl1-mesa-dri:i386 mesa-vulkan-drivers:amd64 mesa-vulkan-drivers:i386 libglx-mesa0:amd64 libglx-mesa0:i386 vulkan-tools libvulkan-dev libgl1-mesa-dev mesa-common-dev mesa-va-drivers:amd64 mesa-va-drivers:i386 mesa-opencl-icd:amd64 ) ;;
+        "amd")    SYSTEM_PKGS+=(libgl1-mesa-dri:amd64 libgl1-mesa-dri:i386 mesa-vulkan-drivers:amd64 mesa-vulkan-drivers:i386 libglx-mesa0:amd64 libglx-mesa0:i386 vulkan-tools libvulkan-dev libgl1-mesa-dev mesa-common-dev mesa-va-drivers:amd64 mesa-va-drivers:i386 mesa-opencl-icd:amd64) ;;
         "intel")  SYSTEM_PKGS+=(libgl1-mesa-dri:amd64 libgl1-mesa-dri:i386 mesa-vulkan-drivers:amd64 mesa-vulkan-drivers:i386 libglx-mesa0:amd64 libglx-mesa0:i386 vulkan-tools libvulkan-dev libgl1-mesa-dev mesa-common-dev intel-media-va-driver-non-free:amd64 intel-media-va-driver-non-free:i386 intel-opencl-icd) ;;
     esac
 done
@@ -487,26 +518,26 @@ if [ "${#GPU_VENDORS[@]}" -gt 0 ]; then
     readarray -t SYSTEM_PKGS < <(printf '%s\n' "${SYSTEM_PKGS[@]}" | awk '!seen[$0]++')
 fi
 
-wait_for_apt
-install_missing -yq "${SYSTEM_PKGS[@]}" || true
-install_missing -yq "${PKGS_32BIT[@]}" || true
-install_missing -yq "${PKGS_CODECS[@]}" || true
+install_apt_pkgs "${SYSTEM_PKGS[@]}"
+install_apt_pkgs "${PKGS_32BIT[@]}"
+install_apt_pkgs "${PKGS_CODECS[@]}"
 
-show_progress 5 $TOTAL_STEPS "$MSG_PHASE_2"
+show_progress 6 $TOTAL_STEPS "$MSG_PHASE_2"
 
 if command -v flatpak &>/dev/null; then
     sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
+    sudo flatpak update --appstream || true
     flatpak info com.github.tchx84.Flatseal &>/dev/null || sudo flatpak install -y flathub com.github.tchx84.Flatseal || true
     flatpak info it.mijorus.gearlever &>/dev/null || sudo flatpak install -y flathub it.mijorus.gearlever || true
 fi
 
-show_progress 6 $TOTAL_STEPS "$MSG_PHASE_2"
+show_progress 7 $TOTAL_STEPS "$MSG_PHASE_2"
 
-add_ppa_and_install "atareao/telegram" telegram || true
+add_ppa_and_install "cdemu/ppa" cdemu-daemon cdemu-client || true
 add_ppa_and_install "zhangsongcui3371/fastfetch" fastfetch || true
-wait_for_apt
-install_missing -yq handbrake handbrake-cli || true
-install_missing -yq cdemu-daemon cdemu-client || true
+add_ppa_and_install "faugus/faugus-launcher" faugus-launcher || true
+
+sudo depmod -a || true
 
 sudo systemctl disable --now cdemu-daemon 2>/dev/null || true
 sudo systemctl mask cdemu-daemon 2>/dev/null || true
@@ -523,30 +554,6 @@ for f in /etc/xdg/autostart/gcdemu.desktop /etc/xdg/autostart/cdemu.desktop /usr
 done
 pkill -f gcdemu 2>/dev/null || true
 
-show_progress 7 $TOTAL_STEPS "$MSG_PHASE_2"
-
-MODULES_FILE="/etc/initramfs-tools/modules"
-add_module() { grep -q "^$1" "$MODULES_FILE" || echo "$1" | sudo tee -a "$MODULES_FILE" > /dev/null; }
-
-if [[ $GPU_TYPE == *"nvidia"* ]]; then
-    add_module "nvidia"
-    add_module "nvidia_modeset"
-    add_module "nvidia_uvm"
-    add_module "nvidia_drm"
-fi
-if [[ $GPU_TYPE == *"amd"* ]]; then
-    add_module "amdgpu"
-fi
-if [[ $GPU_TYPE == *"intel"* ]]; then
-    add_module "i915"
-fi
-
-sudo update-initramfs -u || true
-wait_for_apt
-install_missing -yq "linux-headers-$(uname -r)" || true
-
-show_progress 8 $TOTAL_STEPS "$MSG_PHASE_2"
-
 mkdir -p "$DEB_DIR"
 download_deb() { wget -q --timeout=30 -O "$3" "$2" || rm -f "$3"; }
 get_github_deb_url() { curl -sfL "https://api.github.com/repos/${1}/releases/latest" | grep "browser_download_url.*${2}" | cut -d '"' -f 4 || true; }
@@ -556,20 +563,20 @@ OPENCODE_URL=""
 pkg_installed opencode-desktop || OPENCODE_URL=$(get_github_deb_url "anomalyco/opencode" "opencode-desktop-linux-amd64\\.deb")
 [[ -n "$OPENCODE_URL" ]] && download_deb "opencode-desktop" "$OPENCODE_URL" "$DEB_DIR/opencode-desktop.deb"
 
-add_ppa_and_install "faugus/faugus-launcher" faugus-launcher || true
-
 shopt -s nullglob
 DEB_FILES=("$DEB_DIR"/*.deb)
+shopt -u nullglob
 if [[ ${#DEB_FILES[@]} -gt 0 ]]; then
     wait_for_apt
     for deb in "${DEB_FILES[@]}"; do
-        sudo apt-get install -yq "$deb" || true
+        sudo apt-get install -yq "$deb" || FAILED_PACKAGES+=("$(basename "$deb" .deb)")
     done
 fi
+rm -rf "$DEB_DIR"
 
 LSFG_TMP="$(mktemp -d)"
 LSFG_UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
-LSFG_HTML="$(curl -fsSL -A "$LSFG_UA" -e "https://builds.lsfg-vk.dev/" "https://builds.lsfg-vk.dev/" 2>/dev/null || true)"
+LSFG_HTML="$(curl -fsSL -A "$LSFG_UA" -e "https://builds.lsfg-vk.dev/" "https://builds.lsfg-vk.dev/" || true)"
 LSFG_LINKS="$( { printf '%s' "$LSFG_HTML" | grep -oiE 'href="[^"]+\.tar\.xz"' | sed -E 's/^href="//I; s/"$//'; } || true )
 $( { printf '%s' "$LSFG_HTML" | grep -oiE 'https?://[^"'"'"'<>[:space:]]+\.tar\.xz'; } || true )"
 LSFG_URL="$(printf '%s\n' "$LSFG_LINKS" | grep -iE '(^|/)lsfg-vk-[0-9]+(\.[0-9]+)*\.tar\.xz$' | sort -Vu | tail -n1 || true)"
@@ -582,13 +589,16 @@ if [[ -n "$LSFG_URL" && "$LSFG_URL" != http* ]]; then
         *)  LSFG_URL="https://builds.lsfg-vk.dev/${LSFG_URL}" ;;
     esac
 fi
-if [[ -n "$LSFG_URL" ]] && curl -fsSL -A "$LSFG_UA" -o "$LSFG_TMP/lsfg-vk.tar.xz" "$LSFG_URL" 2>/dev/null && tar -tf "$LSFG_TMP/lsfg-vk.tar.xz" &>/dev/null && mkdir -p "$HOME/.local" && tar -xf "$LSFG_TMP/lsfg-vk.tar.xz" -C "$HOME/.local"; then
+if [[ -n "$LSFG_URL" ]] && curl -fsSL -A "$LSFG_UA" -o "$LSFG_TMP/lsfg-vk.tar.xz" "$LSFG_URL" && tar -tf "$LSFG_TMP/lsfg-vk.tar.xz" &>/dev/null && mkdir -p "$HOME/.local" && tar -xf "$LSFG_TMP/lsfg-vk.tar.xz" -C "$HOME/.local"; then
     :
 else
     log_warn "lsfg-vk: nie udało się pobrać gotowej paczki, pomijam" \
              "lsfg-vk: failed to download prebuilt package, skipping"
 fi
 rm -rf "$LSFG_TMP"
+
+show_progress 8 $TOTAL_STEPS "$MSG_PHASE_2"
+
 # ==========================================================
 # ETAP 3/4: OPTYMALIZACJA
 # ==========================================================
@@ -596,8 +606,89 @@ show_progress 9 $TOTAL_STEPS "$MSG_PHASE_3"
 
 restore_packagekit
 
-wait_for_apt
-install_missing -yq virt-manager qemu-system qemu-utils libvirt-daemon-system libvirt-clients || true
+if [ -f /etc/default/grub ]; then
+    sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub || true
+    grep -q 'mitigations=off' /etc/default/grub || sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 mitigations=off"/' /etc/default/grub || true
+    grep -q 'split_lock_detect=off' /etc/default/grub || sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 split_lock_detect=off"/' /etc/default/grub || true
+    if [[ $GPU_TYPE == *"nvidia"* ]]; then
+        grep -q 'nvidia_drm.modeset=1' /etc/default/grub || sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 nvidia_drm.modeset=1"/' /etc/default/grub || true
+    fi
+    sudo update-grub || true
+fi
+
+show_progress 10 $TOTAL_STEPS "$MSG_PHASE_3"
+
+MODULES_FILE="/etc/initramfs-tools/modules"
+if [ -f "$MODULES_FILE" ]; then
+    add_module() { grep -q "^$1" "$MODULES_FILE" || echo "$1" | sudo tee -a "$MODULES_FILE" > /dev/null; }
+
+    if [[ $GPU_TYPE == *"nvidia"* ]]; then
+        add_module "nvidia"
+        add_module "nvidia_modeset"
+        add_module "nvidia_uvm"
+        add_module "nvidia_drm"
+    fi
+    if [[ $GPU_TYPE == *"amd"* ]]; then
+        add_module "amdgpu"
+    fi
+    if [[ $GPU_TYPE == *"intel"* ]]; then
+        add_module "i915"
+    fi
+
+    sudo update-initramfs -u || true
+fi
+
+show_progress 11 $TOTAL_STEPS "$MSG_PHASE_3"
+
+sudo systemctl enable --now fstrim.timer || true
+sudo systemctl enable --now bluetooth || true
+echo "options btusb enable_autosuspend=0" | sudo tee /etc/modprobe.d/btusb.conf > /dev/null
+
+for svc in libvirtd virtqemud; do
+    if systemctl list-unit-files "${svc}.service" 2>/dev/null | grep -q "$svc"; then
+        sudo systemctl enable --now "${svc}.service" || true
+        break
+    fi
+done
+
+LIBVIRT_NET="192.168.122.0/24"
+if ip -4 -o addr show 2>/dev/null | awk '$2 != "virbr0" && $4 ~ /^192\.168\.122\./ {found=1} END {exit !found}'; then
+    LIBVIRT_NET="192.168.150.0/24"
+fi
+
+if ! sudo virsh net-info default &>/dev/null; then
+    sudo virsh net-define /usr/share/libvirt/networks/default.xml || true
+fi
+
+if [[ "$LIBVIRT_NET" == "192.168.150.0/24" ]]; then
+    LIBVIRT_NET_XML="$(mktemp)"
+    if sudo virsh net-dumpxml default --inactive 2>/dev/null > "$LIBVIRT_NET_XML" && grep -q '192\.168\.122\.' "$LIBVIRT_NET_XML"; then
+        sed -i 's/192\.168\.122\./192.168.150./g' "$LIBVIRT_NET_XML"
+        sudo virsh net-destroy default 2>/dev/null || true
+        sudo virsh net-undefine default 2>/dev/null || true
+        sudo virsh net-define "$LIBVIRT_NET_XML" || true
+    fi
+    rm -f "$LIBVIRT_NET_XML"
+fi
+
+sudo virsh net-start default 2>/dev/null || true
+sudo virsh net-autostart default 2>/dev/null || true
+
+if command -v ufw &>/dev/null; then
+    [[ -f /etc/default/ufw ]] && sudo sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw || true
+    sudo ufw --force reset || true
+    sudo ufw default deny incoming || true
+    sudo ufw default allow outgoing || true
+    sudo ufw allow in  on virbr0 || true
+    sudo ufw allow out on virbr0 || true
+    sudo ufw allow from "$LIBVIRT_NET" || true
+    if pkg_installed openssh-server || [[ -x /usr/sbin/sshd ]] \
+        || systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
+        sudo ufw allow ssh || true
+    fi
+    sudo ufw --force enable || true
+    sudo systemctl enable --now ufw || true
+fi
 
 if command -v dconf &>/dev/null; then
     dconf load /org/virt-manager/virt-manager/ <<'DCONFEOF'
@@ -634,72 +725,17 @@ enable-net-poll=true
 [vmlist-fields]
 disk-usage=false
 network-traffic=false
-
-[vms/2a91721fef6c4249997ea19b01801825]
-autoconnect=1
-vm-window-size=(1280, 842)
 DCONFEOF
 fi
 
-for svc in libvirtd virtqemud; do
-    if systemctl list-unit-files "${svc}.service" 2>/dev/null | grep -q "$svc"; then
-        sudo systemctl enable --now "${svc}.service" || true
-        break
-    fi
-done
-
-LIBVIRT_NET="192.168.122.0/24"
-if ip -4 -o addr show 2>/dev/null | awk '$2 != "virbr0" && $4 ~ /^192\.168\.122\./ {found=1} END {exit !found}'; then
-    LIBVIRT_NET="192.168.150.0/24"
-fi
-
-if ! sudo virsh net-info default &>/dev/null; then
-    sudo virsh net-define /usr/share/libvirt/networks/default.xml || true
-fi
-
-if [[ "$LIBVIRT_NET" == "192.168.150.0/24" ]]; then
-    LIBVIRT_NET_XML="$(mktemp)"
-    if sudo virsh net-dumpxml default --inactive 2>/dev/null > "$LIBVIRT_NET_XML" && grep -q '192\.168\.122\.' "$LIBVIRT_NET_XML"; then
-        sed -i 's/192\.168\.122\./192.168.150./g' "$LIBVIRT_NET_XML"
-        sudo virsh net-destroy default 2>/dev/null || true
-        sudo virsh net-undefine default 2>/dev/null || true
-        sudo virsh net-define "$LIBVIRT_NET_XML" || true
-    fi
-    rm -f "$LIBVIRT_NET_XML"
-fi
-
-sudo virsh net-start default 2>/dev/null || true
-sudo virsh net-autostart default 2>/dev/null || true
-
-show_progress 10 $TOTAL_STEPS "$MSG_PHASE_3"
-
-if command -v ufw &>/dev/null; then
-    [[ -f /etc/default/ufw ]] && sudo sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw || true
-    sudo ufw --force reset || true
-    sudo ufw default deny incoming || true
-    sudo ufw default allow outgoing || true
-    sudo ufw allow in  on virbr0 || true
-    sudo ufw allow out on virbr0 || true
-    sudo ufw allow from "$LIBVIRT_NET" || true
-    if dpkg -s openssh-server &>/dev/null || [[ -x /usr/sbin/sshd ]] \
-        || systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
-        sudo ufw allow ssh || true
-    fi
-    sudo ufw --force enable || true
-fi
+sudo sed -i 's/^#\?[[:space:]]*DefaultTimeoutStopSec=.*/DefaultTimeoutStopSec=3s/' /etc/systemd/system.conf
+sudo sed -i 's/^#\?[[:space:]]*DefaultTimeoutStartSec=.*/DefaultTimeoutStartSec=3s/' /etc/systemd/system.conf
+sudo systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
+sudo journalctl --vacuum-time=2d || true
 
 for grp in libvirt libvirt-qemu kvm; do
     getent group "$grp" &>/dev/null && sudo usermod -aG "$grp" "$CURRENT_USER" || true
 done
-
-sudo systemctl enable fstrim.timer || true
-sudo journalctl --vacuum-time=2d || true
-sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub || true
-grep -q 'mitigations=off' /etc/default/grub || sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 mitigations=off"/' /etc/default/grub || true
-grep -q 'split_lock_detect=off' /etc/default/grub || sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 split_lock_detect=off"/' /etc/default/grub || true
-sudo update-grub || true
-
-show_progress 11 $TOTAL_STEPS "$MSG_PHASE_3"
 
 if command -v zsh &>/dev/null; then
     sudo chsh -s /usr/bin/zsh "$CURRENT_USER" || true
@@ -710,10 +746,10 @@ if command -v zsh &>/dev/null; then
     if [[ ! -d "$P10K_DIR" ]]; then
         git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$P10K_DIR" || true
     fi
-    ZSHRC="$HOME/.zshrc"
-    if [[ -f "$ZSHRC" ]]; then
-        sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|' "$ZSHRC" || true
-        sed -i 's/^plugins=(.*/plugins=(git sudo systemd debian)/' "$ZSHRC" || true
+    if [[ -f ~/.zshrc ]]; then
+        sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|' ~/.zshrc || true
+        sed -i 's/^plugins=(.*/plugins=(git sudo systemd debian)/' ~/.zshrc || true
+
         SHELL_LOCALE="${LANG:-${LC_ALL:-${LC_MESSAGES:-en_US.UTF-8}}}"
         if command -v locale &>/dev/null; then
             AVAILABLE_LOCALES="$(locale -a 2>/dev/null)"
@@ -721,38 +757,28 @@ if command -v zsh &>/dev/null; then
                 SHELL_LOCALE="en_US.UTF-8"
             fi
         fi
-        grep -q "^export LC_ALL=" "$ZSHRC" || echo "export LC_ALL=${SHELL_LOCALE}" >> "$ZSHRC"
-        grep -q "^fastfetch"         "$ZSHRC" || echo "fastfetch"                  >> "$ZSHRC"
-        grep -q "zsh-syntax-highlighting.zsh" "$ZSHRC" || echo "source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" >> "$ZSHRC"
-        grep -q "zsh-autosuggestions.zsh"     "$ZSHRC" || echo "source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh"         >> "$ZSHRC"
+        if ! grep -q "^export LC_ALL=" ~/.zshrc; then
+            {
+                echo ""
+                echo "export LC_ALL=${SHELL_LOCALE}"
+                echo "export LC_MESSAGES=${SHELL_LOCALE}"
+                echo "fastfetch"
+            } >> ~/.zshrc
+        fi
+
+        if ! grep -q "zsh-syntax-highlighting.zsh" ~/.zshrc; then
+            {
+                echo ""
+                echo "source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+                echo "source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
+            } >> ~/.zshrc
+        fi
     fi
 fi
 
-mkdir -p ~/.config ~/.local
-if [[ -d "$SCRIPT_DIR/.config" ]]; then cp -af "$SCRIPT_DIR/.config/." ~/.config/; fi
-if [[ -d "$SCRIPT_DIR/.local" ]]; then cp -af "$SCRIPT_DIR/.local/." ~/.local/; fi
-
-if dpkg -s plasma-desktop &>/dev/null || dpkg -s plasma-workspace &>/dev/null; then
-    mkdir -p ~/.config
-    cat > ~/.config/kwalletrc << 'EOF'
-[Wallet]
-Close When Idle=false
-Close on Screensaver=false
-Default Wallet=kdewallet
-Enabled=false
-First Use=false
-Idle Timeout=10
-Launch Manager=false
-Leave Manager Open=false
-Leave Open=true
-Prompt on Open=false
-Use One Wallet=true
-[org.freedesktop.secrets]
-apiEnabled=false
-EOF
-fi
-
+# ==========================================================
 # ETAP 4/4: CZYSZCZENIE
+# ==========================================================
 show_progress 12 $TOTAL_STEPS "$MSG_PHASE_4"
 printf '\n\n' >&3
 
