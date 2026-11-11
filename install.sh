@@ -244,7 +244,7 @@ pkg_installed() {
 
 pkg_available() {
     local cand
-    cand="$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+    cand="$(LC_ALL=C apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
     [[ -n "$cand" && "$cand" != "(none)" ]]
 }
 
@@ -482,7 +482,7 @@ show_progress 4 $TOTAL_STEPS "$MSG_PHASE_2"
 
 TO_REMOVE=(
 konqueror plasma-browser-integration plasma-vault
-plasma-thunderbolt dragonplayer transmission-qt "evolution*"
+plasma-thunderbolt dragonplayer transmission-qt evolution
 transmission-gtk pragha elisa kontact kmail kontrast plasma-welcome
 kaddressbook cosmic-player kdepim-runtime akonadi-server akregator
 korganizer epiphany-browser decibels gnome-user-docs gnome-contacts 
@@ -627,7 +627,7 @@ OPENCODE_URL=""
 pkg_installed opencode-desktop || OPENCODE_URL=$(get_github_deb_url "anomalyco/opencode" "opencode-desktop-linux-amd64\\.deb")
 [[ -n "$OPENCODE_URL" ]] && download_deb "opencode-desktop" "$OPENCODE_URL" "$DEB_DIR/opencode-desktop.deb"
 
-add_ppa_and_install "faugus/faugus-launcher" faugus-launcher
+add_ppa_and_install "faugus/faugus-launcher" faugus-launcher || true
 
 shopt -s nullglob
 DEB_FILES=("$DEB_DIR"/*.deb)
