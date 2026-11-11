@@ -271,8 +271,6 @@ forget_failed() {
     FAILED_PACKAGES=("${keep[@]}")
 }
 
-# Pakiety bez kandydata w repozytorium są pomijane (jak w arch.sh) i trafiają
-# do FAILED_PACKAGES - komunikat wyświetla się na końcu skryptu.
 install_missing() {
     local -a opts=() valid=()
     local arg p rc=0
@@ -482,12 +480,14 @@ show_progress 4 $TOTAL_STEPS "$MSG_PHASE_2"
 
 TO_REMOVE=(
 konqueror plasma-browser-integration plasma-vault
-plasma-thunderbolt dragonplayer transmission-qt evolution
+plasma-thunderbolt dragonplayer transmission-qt 
+evolution evolution-ews evolution-data-server 
+evolution-bogofilter evolution-spamassassin
 transmission-gtk pragha elisa kontact kmail kontrast plasma-welcome
 kaddressbook cosmic-player kdepim-runtime akonadi-server akregator
 korganizer epiphany-browser decibels gnome-user-docs gnome-contacts 
 gnome-maps gnome-weather gnome-calendar gnome-clocks gnome-music
-parole rhythmbox showtime kwalletmanager totem exaile mpv juk
+parole rhythmbox showtime kwalletmanager totem exaile mpv juk 
 )
 wait_for_apt
 for pkg in "${TO_REMOVE[@]}"; do
@@ -668,7 +668,7 @@ show_progress 9 $TOTAL_STEPS "$MSG_PHASE_3"
 restore_packagekit
 
 wait_for_apt
-install_missing -yq virt-manager qemu-system qemu-utils libvirt-daemon-system libvirt-clients ovmf dnsmasq bluetooth bluez bluez-firmware bluez-tools ufw || true
+install_missing -yq virt-manager qemu-system qemu-utils libvirt-daemon-system libvirt-clients || true
 
 if command -v dconf &>/dev/null; then
     dconf load /org/virt-manager/virt-manager/ <<'DCONFEOF'
