@@ -31,15 +31,26 @@ FAILED_PACKAGES=()
 SUDOERS_TMP=""
 LSFG_TMP=""
 LIBVIRT_NET_XML=""
+LIBVIRT_NET_BAK=""
+LIBVIRT_NET_RESTORE=0
 SUDO_READY=0
+USE_RUN0=0
 SUDO_KEEPALIVE_PID=""
 QUIET_WARNS=0
 RUN0_NOPASSWD_FILE="/etc/polkit-1/rules.d/51-run0-nopasswd.rules"
 TEMP_SUDOERS="/etc/sudoers.d/99-temp-installer"
-APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+APT_OPTS=(-o DPkg::Lock::Timeout=300 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 
 exec 3>&1
 exec >>"$TMP_LOG" 2>&1
+
+_sudo_n() {
+    if [ "${USE_RUN0:-0}" -eq 1 ]; then
+        sudo "$@"
+    else
+        sudo -n "$@"
+    fi
+}
 
 cleanup_on_exit() {
     local exit_code=$?
@@ -50,25 +61,32 @@ cleanup_on_exit() {
     [ -n "${SUDO_KEEPALIVE_PID:-}" ] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null
     declare -F restore_packagekit >/dev/null && restore_packagekit
 
-    rm -f "$SUDOERS_TMP" "$LIBVIRT_NET_XML"
+    if [ "${SUDO_READY:-0}" = "1" ] && [ "${LIBVIRT_NET_RESTORE:-0}" = "1" ] && [ -s "${LIBVIRT_NET_BAK:-}" ]; then
+        _sudo_n virsh net-define "$LIBVIRT_NET_BAK" &>/dev/null
+        _sudo_n virsh net-start default &>/dev/null
+        _sudo_n virsh net-autostart default &>/dev/null
+    fi
+
+    rm -f "$SUDOERS_TMP" "$LIBVIRT_NET_XML" "$LIBVIRT_NET_BAK"
     rm -rf "$LSFG_TMP" "$DEB_DIR"
+
+    if [ "$exit_code" -ne 0 ] || [ "${#FAILED_PACKAGES[@]}" -gt 0 ] || [ "${QUIET_WARNS:-0}" -gt 0 ]; then
+        cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null
+    else
+        rm -f "$LOG_FILE"
+    fi
 
     {
         printf '\033[?7h'
         if [ "$exit_code" -ne 0 ] || [ "${#FAILED_PACKAGES[@]}" -gt 0 ]; then
             echo -e "\n"
-            cp -f "$TMP_LOG" "$LOG_FILE"
-            if [ "$exit_code" -ne 0 ]; then
-                if [[ "$SCRIPT_LANG" == "pl" ]]; then
-                    echo -e "${ERR}[X] Wystąpił błąd (kod: $exit_code). Szczegółowy log zapisano w: $LOG_FILE${NC}"
-                else
-                    echo -e "${ERR}[X] An error occurred (code: $exit_code). Detailed log saved to: $LOG_FILE${NC}"
-                fi
+        fi
+        if [ "$exit_code" -ne 0 ]; then
+            if [[ "$SCRIPT_LANG" == "pl" ]]; then
+                echo -e "${ERR}[X] Wystąpił błąd (kod: $exit_code). Szczegółowy log zapisano w: $LOG_FILE${NC}"
+            else
+                echo -e "${ERR}[X] An error occurred (code: $exit_code). Detailed log saved to: $LOG_FILE${NC}"
             fi
-        elif [ "${QUIET_WARNS:-0}" -eq 0 ]; then
-            rm -f "$LOG_FILE"
-        else
-            cp -f "$TMP_LOG" "$LOG_FILE"
         fi
     } >&3 2>/dev/null
     rm -f "$TMP_LOG"
@@ -76,7 +94,7 @@ cleanup_on_exit() {
     local do_reboot=0
     [ "$exit_code" -eq 0 ] && [ "${DO_REBOOT:-0}" = "1" ] && do_reboot=1
     if [ "${SUDO_READY:-0}" = "1" ]; then
-        sudo sh -c 'rm -f "$1" "$2"; systemctl try-restart polkit 2>/dev/null; if [ "$3" = 1 ]; then systemctl reboot; fi' _ \
+        _sudo_n sh -c 'rm -f "$1" "$2"; systemctl try-restart polkit 2>/dev/null; if [ "$3" = 1 ]; then systemctl reboot; fi' _ \
             "$RUN0_NOPASSWD_FILE" "$TEMP_SUDOERS" "$do_reboot"
     fi
 }
@@ -86,7 +104,7 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 _pick_msg() { [[ "$SCRIPT_LANG" == "pl" ]] && echo "$1" || echo "$2"; }
-_log_write() { printf "\r\033[K" >&3; echo -e "$1" >&3; echo -e "$1"; cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null || true; }
+_log_write() { printf "\r\033[K" >&3 2>/dev/null || true; echo -e "$1" >&3 2>/dev/null || true; echo -e "$1"; cp -f "$TMP_LOG" "$LOG_FILE" 2>/dev/null || true; }
 log_info()  { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${INFO}==> $m${NC}"; }
 log_ok()    { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${SUCCESS}[OK] $m${NC}"; }
 log_err()   { local m; m="$(_pick_msg "$1" "$2")"; _log_write "${ERR}[X] ERROR: $m${NC}"; }
@@ -115,7 +133,7 @@ disable_packagekit() {
 
 restore_packagekit() {
     [[ "${PACKAGEKIT_MASKED:-0}" -eq 1 ]] || return 0
-    sudo systemctl unmask "${PACKAGEKIT_UNITS[@]}" 2>/dev/null || true
+    _sudo_n systemctl unmask "${PACKAGEKIT_UNITS[@]}" 2>/dev/null || true
     PACKAGEKIT_MASKED=0
 }
 
@@ -179,7 +197,7 @@ show_progress() {
     if [ $filled -gt 0 ]; then printf -v bar_filled '%*s' "$filled" ''; bar_filled="${bar_filled// /#}"; fi
     if [ $empty -gt 0 ]; then printf -v bar_empty '%*s' "$empty" ''; bar_empty="${bar_empty// /-}"; fi
 
-    printf "\r\033[K[\033[1;32m%s\033[0;90m%s\033[0m] %3d%% | \033[1;36m%s\033[0m" "$bar_filled" "$bar_empty" "$percent" "$msg" >&3
+    printf "\r\033[K[\033[1;32m%s\033[0;90m%s\033[0m] %3d%% | \033[1;36m%s\033[0m" "$bar_filled" "$bar_empty" "$percent" "$msg" >&3 2>/dev/null || true
 }
 
 if [[ "$SCRIPT_LANG" == "pl" ]]; then
@@ -198,9 +216,9 @@ TOTAL_STEPS=12
 
 if [[ "$EUID" -eq 0 ]]; then
     if [[ "$SCRIPT_LANG" == "pl" ]]; then
-        echo -e "${ERR}[X] Nie uruchamiaj skryptu jako root. Uruchom jako zwykły użytkownik z sudo.${NC}" >&3
+        echo -e "${ERR}[X] Nie uruchamiaj skryptu jako root. Uruchom jako zwykły użytkownik z sudo.${NC}" >&3 2>/dev/null || true
     else
-        echo -e "${ERR}[X] Do not run this script as root. Run as a normal user with sudo.${NC}" >&3
+        echo -e "${ERR}[X] Do not run this script as root. Run as a normal user with sudo.${NC}" >&3 2>/dev/null || true
     fi
     exit 1
 fi
@@ -208,7 +226,7 @@ fi
 CURRENT_USER=$(whoami)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
-printf '\033[?7h\n' >&3
+printf '\033[?7h\n' >&3 2>/dev/null || true
 
 USE_RUN0=0
 SUDO_VERSION_OUT="$(sudo --version 2>/dev/null || true)"
@@ -217,15 +235,13 @@ if ! command -v visudo >/dev/null 2>&1 || grep -qi "run0" <<< "$SUDO_VERSION_OUT
 fi
 
 if [[ "$USE_RUN0" -eq 1 ]]; then
-    SUDO_READY=1
-    sudo tee "$RUN0_NOPASSWD_FILE" > /dev/null << EOF
-polkit.addRule(function(action, subject) {
-    if (subject.user == "$CURRENT_USER") {
-        return polkit.Result.YES;
-    }
-});
-EOF
-    sudo systemctl try-restart polkit 2>/dev/null || true
+    if printf 'polkit.addRule(function(action, subject) {\n    if (subject.user == "%s") {\n        return polkit.Result.YES;\n    }\n});\n' "$CURRENT_USER" | sudo tee "$RUN0_NOPASSWD_FILE" > /dev/null; then
+        SUDO_READY=1
+        sudo systemctl try-restart polkit 2>/dev/null || true
+    else
+        log_err "Nie udało się uzyskać uprawnień administratora." "Failed to obtain administrator privileges."
+        exit 1
+    fi
 else
     sudo -v
     SUDO_READY=1
@@ -248,9 +264,9 @@ else
     else
         rm -f "$SUDOERS_TMP"
         if [[ "$SCRIPT_LANG" == "pl" ]]; then
-            echo -e "${ERR}[X] Nieprawidłowa składnia reguły sudoers - przerywam.${NC}" >&3
+            echo -e "${ERR}[X] Nieprawidłowa składnia reguły sudoers - przerywam.${NC}" >&3 2>/dev/null || true
         else
-            echo -e "${ERR}[X] Invalid sudoers rule syntax - aborting.${NC}" >&3
+            echo -e "${ERR}[X] Invalid sudoers rule syntax - aborting.${NC}" >&3 2>/dev/null || true
         fi
         exit 1
     fi
@@ -258,11 +274,11 @@ else
     SUDOERS_TMP=""
 fi
 
-printf '\033[?7l' >&3
+printf '\033[?7l' >&3 2>/dev/null || true
 
-source /etc/os-release
-OS_CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
-echo "Wykryty system: ${PRETTY_NAME:-nieznany}, codename: ${OS_CODENAME:-nieznany}"
+OS_CODENAME="$(. /etc/os-release 2>/dev/null && echo "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")"
+OS_PRETTY_NAME="$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-}")"
+echo "Wykryty system: ${OS_PRETTY_NAME:-nieznany}, codename: ${OS_CODENAME:-nieznany}"
 
 # ==========================================================
 # ETAP 1/4: PRZYGOTOWYWANIE
@@ -270,6 +286,10 @@ echo "Wykryty system: ${PRETTY_NAME:-nieznany}, codename: ${OS_CODENAME:-nieznan
 show_progress 0 $TOTAL_STEPS "$MSG_PHASE_1"
 
 disable_packagekit
+
+apt_get() {
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get "$@"
+}
 
 pkg_installed() {
     [[ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null)" == ii* ]]
@@ -287,7 +307,7 @@ install_apt_pkgs() {
         fi
     done
     for pkg in "${valid_pkgs[@]}"; do
-        sudo apt-get install -yq "${APT_OPTS[@]}" "$pkg" || FAILED_PACKAGES+=("$pkg")
+        apt_get install -yq "${APT_OPTS[@]}" "$pkg" || FAILED_PACKAGES+=("$pkg")
     done
 }
 
@@ -308,14 +328,14 @@ add_ppa_and_install() {
     fi
 
     wait_for_apt
-    if ! sudo -E env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository -y "ppa:$ppa"; then
+    if ! sudo env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository -y "ppa:$ppa"; then
         log_quiet "Nie udało się dodać ppa:$ppa" "Failed to add ppa:$ppa"
         FAILED_PACKAGES+=("${packages[@]}")
         return 1
     fi
 
     wait_for_apt
-    sudo apt-get update -yq || log_quiet "apt-get update zakończył się błędem." "apt-get update failed."
+    apt_get update -yq || log_quiet "apt-get update zakończył się błędem." "apt-get update failed."
     install_apt_pkgs "${packages[@]}"
 
     all_installed=1
@@ -328,9 +348,9 @@ add_ppa_and_install() {
         return 0
     fi
 
-    sudo -E env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository --remove -y "ppa:$ppa" || true
+    sudo env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository --remove -y "ppa:$ppa" || true
     wait_for_apt
-    sudo apt-get update -yq || log_quiet "apt-get update zakończył się błędem." "apt-get update failed."
+    apt_get update -yq || log_quiet "apt-get update zakończył się błędem." "apt-get update failed."
     return 1
 }
 
@@ -339,12 +359,14 @@ sudo sed -i '/cdrom/s/^/#/' /etc/apt/sources.list 2>/dev/null || true
 sudo dpkg --add-architecture i386 || true
 
 if command -v add-apt-repository &>/dev/null; then
-    sudo -E env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository -y universe || true
-    sudo -E env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository -y multiverse || true
+    sudo env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository -y universe || true
+    sudo env DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 add-apt-repository -y multiverse || true
 fi
 
 wait_for_apt
-sudo apt-get update -yq || log_quiet "apt-get update zakończył się błędem." "apt-get update failed."
+apt_get update -yq || log_quiet "apt-get update zakończył się błędem." "apt-get update failed."
+apt_get full-upgrade -yq "${APT_OPTS[@]}" || log_quiet "apt-get full-upgrade zakończył się błędem." "apt-get full-upgrade failed."
+apt_get autoremove -yq || true
 install_apt_pkgs curl wget gnupg pciutils dconf-cli software-properties-common xz-utils
 
 GPU_TYPE="unknown"
@@ -371,7 +393,7 @@ if command -v lspci &>/dev/null; then
     elif [ "$TOTAL_KNOWN" -ge 2 ]; then
         HYBRID_GPU=true
         GPU_TYPE="$(IFS=+; echo "${GPU_VENDORS[*]}")"
-        log_info "Wykryto hybrydowy układ graficzny (HYBRID_GPU=$HYBRID_GPU): $GPU_TYPE" "Detected a hybrid GPU setup (HYBRID_GPU=$HYBRID_GPU): $GPU_TYPE"
+        _pick_msg "Wykryto hybrydowy układ graficzny (HYBRID_GPU=$HYBRID_GPU): $GPU_TYPE" "Detected a hybrid GPU setup (HYBRID_GPU=$HYBRID_GPU): $GPU_TYPE"
     else
         HYBRID_GPU=false
         GPU_TYPE="${GPU_VENDORS[0]}"
@@ -408,18 +430,35 @@ korganizer epiphany-browser decibels gnome-user-docs gnome-contacts
 gnome-maps gnome-weather gnome-calendar gnome-clocks gnome-music
 parole rhythmbox showtime kwalletmanager totem exaile mpv juk
 )
-CORE_PKGS=(sudo systemd network-manager ubuntu-desktop ubuntu-desktop-minimal ubuntu-session ubuntu-standard
+CORE_PKGS=(sudo systemd network-manager ubuntu-session
            gnome-shell gnome-session gdm3 lightdm sddm plasma-login-manager plasma-desktop plasma-workspace
-           kde-plasma-desktop xorg xwayland)
+           xorg xwayland)
 CORE_RE="^($(IFS='|'; echo "${CORE_PKGS[*]}"))\$"
+TO_REMOVE_RE="^($(IFS='|'; echo "${TO_REMOVE[*]}"))\$"
 
 would_remove_core() {
     local removed
-    removed="$(sudo apt-get -s "$@" 2>/dev/null | awk '/^Remv /{print $2}')" || true
+    removed="$(apt_get -s "$@" 2>/dev/null | awk '/^Remv /{print $2}')" || true
     grep -Eq "$CORE_RE" <<< "$removed"
 }
 
 wait_for_apt
+for meta in ubuntu-desktop ubuntu-desktop-minimal ubuntu-standard kubuntu-desktop kde-plasma-desktop xubuntu-desktop lubuntu-desktop gnome-core task-gnome-desktop; do
+    pkg_installed "$meta" || continue
+    mapfile -t META_DEPS < <(
+        apt-cache depends "$meta" 2>/dev/null \
+        | awk '/(Depends|Recommends):/ && $2 !~ /^</ {gsub(/:.*/, "", $2); print $2}' \
+        | grep -Ev "$TO_REMOVE_RE" \
+        | sort -u || true
+    )
+    if [[ ${#META_DEPS[@]} -gt 0 ]]; then
+        mapfile -t INSTALLED_META_DEPS < <(
+            dpkg-query -W -f='${db:Status-Abbrev}\t${Package}\n' "${META_DEPS[@]}" 2>/dev/null \
+            | awk '$1 ~ /^ii/ {print $2}' || true
+        )
+        [[ ${#INSTALLED_META_DEPS[@]} -gt 0 ]] && sudo apt-mark manual "${INSTALLED_META_DEPS[@]}" >/dev/null || true
+    fi
+done
 for core in "${CORE_PKGS[@]}"; do
     pkg_installed "$core" && sudo apt-mark manual "$core" >/dev/null || true
 done
@@ -430,13 +469,13 @@ for pkg in "${TO_REMOVE[@]}"; do
                   "Skipping removal of $pkg - it would remove core desktop packages."
         continue
     fi
-    sudo apt-get purge -yq "$pkg" || true
+    apt_get purge -yq "$pkg" || true
 done
 if would_remove_core autoremove --purge -y; then
     log_quiet "Pomijam autoremove - usunąłby kluczowe pakiety pulpitu." \
               "Skipping autoremove - it would remove core desktop packages."
 else
-    sudo apt-get autoremove --purge -yq || true
+    apt_get autoremove --purge -yq || true
 fi
 
 if pkg_installed plasma-desktop || pkg_installed plasma-workspace; then
@@ -473,15 +512,23 @@ sudo mkdir -p /etc/apt/keyrings
 sudo chmod 755 /etc/apt/keyrings
 
 if [ ! -f /etc/apt/keyrings/google-chrome.gpg ]; then
-    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor --yes -o /etc/apt/keyrings/google-chrome.gpg
-    sudo chmod 644 /etc/apt/keyrings/google-chrome.gpg
-    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list > /dev/null
+    if curl -fsSL --retry 3 --retry-delay 2 https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor --yes -o /etc/apt/keyrings/google-chrome.gpg; then
+        sudo chmod 644 /etc/apt/keyrings/google-chrome.gpg || true
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list > /dev/null || true
+    else
+        sudo rm -f /etc/apt/keyrings/google-chrome.gpg 2>/dev/null || true
+        log_quiet "Nie udało się dodać repozytorium Google Chrome." "Failed to add Google Chrome repository."
+    fi
 fi
 
 sudo mkdir -p /usr/share/keyrings
-sudo curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
-sudo chmod 644 /usr/share/keyrings/brave-browser-archive-keyring.gpg
-sudo curl -fsSLo /etc/apt/sources.list.d/brave-browser-release.sources https://brave-browser-apt-release.s3.brave.com/brave-browser.sources
+if sudo curl -fsSL --retry 3 --retry-delay 2 -o /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg \
+    && sudo curl -fsSL --retry 3 --retry-delay 2 -o /etc/apt/sources.list.d/brave-browser-release.sources https://brave-browser-apt-release.s3.brave.com/brave-browser.sources; then
+    sudo chmod 644 /usr/share/keyrings/brave-browser-archive-keyring.gpg || true
+else
+    sudo rm -f /usr/share/keyrings/brave-browser-archive-keyring.gpg /etc/apt/sources.list.d/brave-browser-release.sources 2>/dev/null || true
+    log_quiet "Nie udało się dodać repozytorium Brave." "Failed to add Brave repository."
+fi
 
 sudo mkdir -p /etc/NetworkManager/conf.d
 echo -e "[main]\ndns=default\nrc-manager=symlink" | sudo tee /etc/NetworkManager/conf.d/dns.conf > /dev/null
@@ -503,9 +550,7 @@ show_progress 3 $TOTAL_STEPS "$MSG_PHASE_1"
 show_progress 4 $TOTAL_STEPS "$MSG_PHASE_2"
 
 wait_for_apt
-sudo apt-get update -yq || log_quiet "apt-get update zakończył się błędem." "apt-get update failed."
-sudo apt-get upgrade -yq "${APT_OPTS[@]}" || log_quiet "apt-get upgrade zakończył się błędem." "apt-get upgrade failed."
-sudo apt-get autoremove -yq || true
+apt_get update -yq || log_quiet "apt-get update zakończył się błędem." "apt-get update failed."
 
 show_progress 5 $TOTAL_STEPS "$MSG_PHASE_2"
 
@@ -595,7 +640,7 @@ for f in /etc/xdg/autostart/gcdemu.desktop /etc/xdg/autostart/cdemu.desktop /usr
     if [[ -f "$f" ]]; then
         cp -f "$f" "$HOME/.config/autostart/$(basename "$f")"
         if grep -q '^Hidden=' "$HOME/.config/autostart/$(basename "$f")"; then
-            sed -i 's/^Hidden=.*/Hidden=true/' "$HOME/.config/autostart/$(basename "$f")"
+            sed -i 's/^Hidden=.*/Hidden=true/' "$HOME/.config/autostart/$(basename "$f")" || true
         else
             echo "Hidden=true" >> "$HOME/.config/autostart/$(basename "$f")"
         fi
@@ -605,7 +650,7 @@ pkill -f gcdemu 2>/dev/null || true
 
 mkdir -p "$DEB_DIR"
 download_deb() { wget -q --timeout=30 -O "$3" "$2" || { rm -f "$3"; FAILED_PACKAGES+=("$1"); }; }
-get_github_deb_url() { curl -sfL "https://api.github.com/repos/${1}/releases/latest" | grep "browser_download_url.*${2}" | cut -d '"' -f 4 | head -n 1 || true; }
+get_github_deb_url() { local j; j="$(curl -sfL "https://api.github.com/repos/${1}/releases/latest" 2>/dev/null || true)"; grep -m1 "\"browser_download_url\".*${2}\"" <<< "$j" | cut -d '"' -f 4 || true; }
 
 pkg_installed discord || download_deb "Discord" "https://discord.com/api/download?platform=linux&format=deb" "$DEB_DIR/discord.deb"
 OPENCODE_URL=""
@@ -624,7 +669,7 @@ shopt -u nullglob
 if [[ ${#DEB_FILES[@]} -gt 0 ]]; then
     wait_for_apt
     for deb in "${DEB_FILES[@]}"; do
-        sudo apt-get install -yq "${APT_OPTS[@]}" "$deb" || FAILED_PACKAGES+=("$(basename "$deb" .deb)")
+        apt_get install -yq "${APT_OPTS[@]}" "$deb" || FAILED_PACKAGES+=("$(basename "$deb" .deb)")
     done
 fi
 rm -rf "$DEB_DIR"
@@ -658,8 +703,8 @@ for LSFG_URL in "${LSFG_URLS[@]}"; do
     rm -f "$LSFG_TMP/lsfg-vk.tar.xz"
     if curl -fsSL --retry 3 --retry-delay 2 -A "$LSFG_UA" -e "$LSFG_BASE/" -o "$LSFG_TMP/lsfg-vk.tar.xz" "$LSFG_URL" 2>/dev/null; then
         if LSFG_TAR_LIST="$(tar -tf "$LSFG_TMP/lsfg-vk.tar.xz" 2>/dev/null)"; then
-            if printf '%s\n' "$LSFG_TAR_LIST" | grep -qE '(^|/)bin/lsfg-vk-(ui|cli)$'; then
-                BIN_LINE="$(printf '%s\n' "$LSFG_TAR_LIST" | grep -E '(^|/)bin/lsfg-vk-(ui|cli)$' | head -n 1)"
+            if grep -qE '(^|/)bin/lsfg-vk-(ui|cli)$' <<< "$LSFG_TAR_LIST"; then
+                BIN_LINE="$(grep -m1 -E '(^|/)bin/lsfg-vk-(ui|cli)$' <<< "$LSFG_TAR_LIST")"
                 PREFIX="${BIN_LINE%bin/lsfg-vk-*}"
                 PREFIX="${PREFIX#./}"
                 STRIP=0
@@ -706,11 +751,27 @@ show_progress 9 $TOTAL_STEPS "$MSG_PHASE_3"
 restore_packagekit
 
 if [ -f /etc/default/grub ]; then
-    sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub || true
-    grep -q 'mitigations=off' /etc/default/grub || sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 mitigations=off"/' /etc/default/grub || true
-    grep -q 'split_lock_detect=off' /etc/default/grub || sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 split_lock_detect=off"/' /etc/default/grub || true
-    if [[ $GPU_TYPE == *"nvidia"* ]]; then
-        grep -q 'nvidia_drm.modeset=1' /etc/default/grub || sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 nvidia_drm.modeset=1"/' /etc/default/grub || true
+    GRUB_PARAMS=(mitigations=off split_lock_detect=off)
+    [[ $GPU_TYPE == *"nvidia"* ]] && GRUB_PARAMS+=(nvidia_drm.modeset=1)
+
+    GRUB_CMDLINE_CURRENT="$(awk -F= '/^GRUB_CMDLINE_LINUX_DEFAULT=/{v=substr($0, index($0,"=")+1); gsub(/^["\047]|["\047]$/, "", v); last=v} END{print last}' /etc/default/grub 2>/dev/null || true)"
+    GRUB_CMDLINE_NEW="$GRUB_CMDLINE_CURRENT"
+    for param in "${GRUB_PARAMS[@]}"; do
+        if [[ " $GRUB_CMDLINE_NEW " != *" $param "* ]]; then
+            GRUB_CMDLINE_NEW="${GRUB_CMDLINE_NEW:+$GRUB_CMDLINE_NEW }${param}"
+        fi
+    done
+    if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
+        if [[ "$GRUB_CMDLINE_NEW" != "$GRUB_CMDLINE_CURRENT" ]]; then
+            sudo sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"${GRUB_CMDLINE_NEW}\"|" /etc/default/grub || true
+        fi
+    else
+        echo "GRUB_CMDLINE_LINUX_DEFAULT=\"${GRUB_CMDLINE_NEW}\"" | sudo tee -a /etc/default/grub > /dev/null || true
+    fi
+    if grep -q '^#\?GRUB_TIMEOUT=' /etc/default/grub; then
+        sudo sed -i 's/^#\?GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub || true
+    else
+        echo 'GRUB_TIMEOUT=0' | sudo tee -a /etc/default/grub > /dev/null || true
     fi
     sudo update-grub || true
 fi
@@ -761,13 +822,19 @@ fi
 
 if [[ "$LIBVIRT_NET" == "192.168.150.0/24" ]]; then
     LIBVIRT_NET_XML="$(mktemp)"
+    LIBVIRT_NET_BAK="$(mktemp)"
     if sudo virsh net-dumpxml default --inactive 2>/dev/null > "$LIBVIRT_NET_XML" && grep -q '192\.168\.122\.' "$LIBVIRT_NET_XML"; then
-        sed -i 's/192\.168\.122\./192.168.150./g' "$LIBVIRT_NET_XML"
+        cp -f "$LIBVIRT_NET_XML" "$LIBVIRT_NET_BAK"
+        sed -i 's/192\.168\.122\./192.168.150./g' "$LIBVIRT_NET_XML" || true
+        LIBVIRT_NET_RESTORE=1
         sudo virsh net-destroy default 2>/dev/null || true
         sudo virsh net-undefine default 2>/dev/null || true
-        sudo virsh net-define "$LIBVIRT_NET_XML" || true
+        if ! sudo virsh net-define "$LIBVIRT_NET_XML"; then
+            sudo virsh net-define "$LIBVIRT_NET_BAK" || true
+        fi
+        LIBVIRT_NET_RESTORE=0
     fi
-    rm -f "$LIBVIRT_NET_XML"
+    rm -f "$LIBVIRT_NET_XML" "$LIBVIRT_NET_BAK"
 fi
 
 sudo virsh net-start default 2>/dev/null || true
@@ -837,8 +904,11 @@ network-traffic=false
 DCONFEOF
 fi
 
-sudo sed -i 's/^#\?[[:space:]]*DefaultTimeoutStopSec=.*/DefaultTimeoutStopSec=3s/' /etc/systemd/system.conf
-sudo sed -i 's/^DefaultTimeoutStartSec=3s$/#DefaultTimeoutStartSec=90s/' /etc/systemd/system.conf || true
+sudo mkdir -p /etc/systemd/system.conf.d
+printf '[Manager]\nDefaultTimeoutStopSec=3s\n' | sudo tee /etc/systemd/system.conf.d/10-timeouts.conf >/dev/null || true
+if [ -f /etc/systemd/system.conf ]; then
+    sudo sed -i 's/^DefaultTimeoutStartSec=3s$/#DefaultTimeoutStartSec=90s/' /etc/systemd/system.conf 2>/dev/null || true
+fi
 sudo systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
 sudo journalctl --vacuum-time=2d || true
 
@@ -860,9 +930,9 @@ if command -v zsh &>/dev/null; then
         sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|' ~/.zshrc || true
         sed -i 's/^plugins=(.*/plugins=(git sudo systemd debian)/' ~/.zshrc || true
 
-        SHELL_LOCALE="${LANG:-${LC_ALL:-${LC_MESSAGES:-en_US.UTF-8}}}"
+        SHELL_LOCALE="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US.UTF-8}}}"
         if command -v locale &>/dev/null; then
-            AVAILABLE_LOCALES="$(locale -a 2>/dev/null)"
+            AVAILABLE_LOCALES="$(locale -a 2>/dev/null || true)"
             if ! grep -qiF "$SHELL_LOCALE" <<< "$AVAILABLE_LOCALES" && ! grep -qiF "${SHELL_LOCALE//UTF-8/utf8}" <<< "$AVAILABLE_LOCALES"; then
                 SHELL_LOCALE="en_US.UTF-8"
             fi
@@ -890,16 +960,16 @@ fi
 # ETAP 4/4: CZYSZCZENIE
 # ==========================================================
 show_progress 12 $TOTAL_STEPS "$MSG_PHASE_4"
-printf '\n\n' >&3
+printf '\n\n' >&3 2>/dev/null || true
 
 if [ "${#FAILED_PACKAGES[@]}" -gt 0 ]; then
     log_warn "Nie udało się zainstalować: ${FAILED_PACKAGES[*]}" "Failed to install: ${FAILED_PACKAGES[*]}"
 fi
 
 if [[ "$SCRIPT_LANG" == "pl" ]]; then
-    echo -e "${SUCCESS}[OK] KONFIGURACJA ZAKOŃCZONA SUKCESEM!${NC}" >&3
+    echo -e "${SUCCESS}[OK] KONFIGURACJA ZAKOŃCZONA SUKCESEM!${NC}" >&3 2>/dev/null || true
 else
-    echo -e "${SUCCESS}[OK] CONFIGURATION COMPLETED SUCCESSFULLY!${NC}" >&3
+    echo -e "${SUCCESS}[OK] CONFIGURATION COMPLETED SUCCESSFULLY!${NC}" >&3 2>/dev/null || true
 fi
 
 # ==========================================================
@@ -910,7 +980,7 @@ if [[ "$SCRIPT_LANG" == "pl" ]]; then
 else
     RESTART_PROMPT="Do you want to restart the system now? [Y/N]: "
 fi
-echo -en "${INFO}==> ${RESTART_PROMPT}${NC}" >&3
+echo -en "${INFO}==> ${RESTART_PROMPT}${NC}" >&3 2>/dev/null || true
 RESTART_CHOICE=""
 read -r RESTART_CHOICE < /dev/tty || RESTART_CHOICE=""
 case "$RESTART_CHOICE" in
