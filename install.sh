@@ -431,8 +431,8 @@ gnome-maps gnome-weather gnome-calendar gnome-clocks gnome-music
 parole rhythmbox showtime kwalletmanager totem exaile mpv juk
 )
 CORE_PKGS=(sudo systemd network-manager ubuntu-session
-           gnome-shell gnome-session gdm3 lightdm sddm plasma-login-manager plasma-desktop plasma-workspace
-           xorg xwayland)
+           gnome-shell gnome-session gdm3 lightdm plasma-login-manager plasma-desktop plasma-workspace
+           cosmic-session xwayland)
 CORE_RE="^($(IFS='|'; echo "${CORE_PKGS[*]}"))\$"
 TO_REMOVE_RE="^($(IFS='|'; echo "${TO_REMOVE[*]}"))\$"
 
