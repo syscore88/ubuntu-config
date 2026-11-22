@@ -432,7 +432,7 @@ parole rhythmbox showtime kwalletmanager totem exaile mpv juk
 )
 CORE_PKGS=(sudo systemd network-manager ubuntu-session
            gnome-shell gnome-session gdm3 lightdm plasma-login-manager plasma-desktop plasma-workspace
-           cosmic-session xwayland)
+           cosmic-session xwayland sudo systemd)
 CORE_RE="^($(IFS='|'; echo "${CORE_PKGS[*]}"))\$"
 TO_REMOVE_RE="^($(IFS='|'; echo "${TO_REMOVE[*]}"))\$"
 
